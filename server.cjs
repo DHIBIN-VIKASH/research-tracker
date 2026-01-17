@@ -116,7 +116,7 @@ app.post('/api/update', async (req, res) => {
 
 // The "catchall" handler: for any request that doesn't
 // match one above, send back React's index.html file.
-app.get('(.*)', (req, res) => {
+app.get('/:path*', (req, res) => {
     res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
