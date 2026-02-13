@@ -154,6 +154,9 @@ const App = () => {
         p.status?.toLowerCase().includes(searchTerm.toLowerCase())
     );
 
+    const publishedPapers = papers.filter(p => p.status?.toLowerCase().includes('published'));
+    const pendingPapers = filteredPapers.filter(p => !p.status?.toLowerCase().includes('published'));
+
     return (
         <div className="dashboard-container" style={{ padding: '2rem', maxWidth: '1400px', margin: '0 auto' }}>
             {/* Header Section */}
@@ -198,6 +201,48 @@ const App = () => {
                     {error}
                 </motion.div>
             )}
+
+            {/* Published Works Hall of Fame */}
+            <AnimatePresence>
+                {publishedPapers.length > 0 && (
+                    <motion.div
+                        initial={{ opacity: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className="glass-card"
+                        style={{
+                            padding: '2rem',
+                            marginBottom: '2rem',
+                            background: 'linear-gradient(135deg, rgba(0, 242, 255, 0.1) 0%, rgba(128, 90, 213, 0.1) 100%)',
+                            border: '1px solid var(--neon-cyan)'
+                        }}
+                    >
+                        <h2 style={{ fontSize: '1.2rem', color: 'var(--neon-cyan)', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                            <GraduationCap size={24} /> Published Works
+                        </h2>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.5rem' }}>
+                            {publishedPapers.map(paper => (
+                                <motion.div
+                                    key={paper.firestoreId}
+                                    layoutId={paper.firestoreId}
+                                    className="glass-card"
+                                    style={{ padding: '1.25rem', borderLeft: '4px solid var(--neon-cyan)' }}
+                                >
+                                    <h3 style={{ fontSize: '0.95rem', lineHeight: '1.4', marginBottom: '0.75rem' }}>{paper.title}</h3>
+                                    <span style={{
+                                        padding: '0.3rem 0.6rem',
+                                        borderRadius: '4px',
+                                        fontSize: '0.65rem',
+                                        fontWeight: '800',
+                                        ...getStatusStyles(paper.status, paper.color, paper.fontColor)
+                                    }}>
+                                        {paper.status}
+                                    </span>
+                                </motion.div>
+                            ))}
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
             {/* Main Grid */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '2rem' }}>
@@ -265,7 +310,7 @@ const App = () => {
                             </thead>
                             <tbody>
                                 <AnimatePresence>
-                                    {filteredPapers.map((paper, index) => (
+                                    {pendingPapers.map((paper, index) => (
                                         <motion.tr
                                             key={paper.firestoreId}
                                             initial={{ opacity: 0, x: -20 }}
@@ -388,6 +433,28 @@ const App = () => {
                                         }}
                                     />
                                 </div>
+
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                    <div>
+                                        <label style={{ display: 'block', color: 'var(--text-secondary)', fontSize: '0.7rem', marginBottom: '0.5rem' }}>Badge BG Color</label>
+                                        <input
+                                            type="color"
+                                            value={isAddingMode ? (newPaper.color || "#00f2ff") : (editingPaper?.color || "#00f2ff")}
+                                            onChange={(e) => isAddingMode ? setNewPaper({ ...newPaper, color: e.target.value }) : setEditingPaper({ ...editingPaper, color: e.target.value })}
+                                            style={{ width: '100%', height: '40px', background: 'transparent', border: 'none', cursor: 'pointer' }}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label style={{ display: 'block', color: 'var(--text-secondary)', fontSize: '0.7rem', marginBottom: '0.5rem' }}>Badge Font Color</label>
+                                        <input
+                                            type="color"
+                                            value={isAddingMode ? (newPaper.fontColor || "#00f2ff") : (editingPaper?.fontColor || "#00f2ff")}
+                                            onChange={(e) => isAddingMode ? setNewPaper({ ...newPaper, fontColor: e.target.value }) : setEditingPaper({ ...editingPaper, fontColor: e.target.value })}
+                                            style={{ width: '100%', height: '40px', background: 'transparent', border: 'none', cursor: 'pointer' }}
+                                        />
+                                    </div>
+                                </div>
+
                                 <button
                                     className="btn-primary"
                                     style={{ width: '100%', padding: '1rem', justifyContent: 'center' }}
