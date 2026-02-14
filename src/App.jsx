@@ -383,7 +383,7 @@ const App = () => {
                                 initial={{ width: 0 }}
                                 animate={{ width: `${Math.min((papers.length / 50) * 100, 100)}%` }}
                                 transition={{ duration: 1.5, ease: "easeOut" }}
-                                style={{ background: 'linear-gradient(90deg, #00ff9d, #00b050)' }}
+                                style={{ background: 'linear-gradient(90deg, #00f2ff, #0077ff)' }}
                             />
                         </div>
                     </div>
@@ -400,7 +400,7 @@ const App = () => {
                                 initial={{ width: 0 }}
                                 animate={{ width: `${(publishedPapers.length / (papers.length || 1)) * 100}%` }}
                                 transition={{ duration: 1.5, ease: "easeOut" }}
-                                style={{ background: 'linear-gradient(90deg, #00f2ff, #0077ff)' }}
+                                style={{ background: 'linear-gradient(90deg, #00ff9d, #00b050)' }}
                             />
                         </div>
                     </div>
