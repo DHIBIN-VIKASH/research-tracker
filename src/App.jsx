@@ -375,7 +375,7 @@ const App = () => {
                     <div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '0.75rem' }}>
                             <label style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase' }}>Progress to the Target</label>
-                            <span style={{ color: 'var(--neon-green)', fontWeight: '800', fontSize: '1.1rem' }}>{papers.length}/50</span>
+                            <span style={{ color: 'var(--neon-cyan)', fontWeight: '800', fontSize: '1.1rem' }}>{papers.length}/50</span>
                         </div>
                         <div className="progress-container" style={{ height: '10px' }}>
                             <motion.div
@@ -392,7 +392,7 @@ const App = () => {
                     <div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '0.75rem' }}>
                             <label style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', fontWeight: 'bold', textTransform: 'uppercase' }}>Published papers</label>
-                            <span style={{ color: 'var(--neon-cyan)', fontWeight: '800', fontSize: '1.1rem' }}>{publishedPapers.length}/{papers.length}</span>
+                            <span style={{ color: 'var(--neon-green)', fontWeight: '800', fontSize: '1.1rem' }}>{publishedPapers.length}/{papers.length}</span>
                         </div>
                         <div className="progress-container" style={{ height: '10px', background: 'rgba(0, 242, 255, 0.05)' }}>
                             <motion.div
