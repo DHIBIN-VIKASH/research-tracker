@@ -216,6 +216,60 @@ h3,
   }
 }
 
+.premium-link {
+  color: var(--text-secondary);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  padding: 2px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.premium-link:hover {
+  color: var(--neon-cyan);
+  background: rgba(0, 242, 255, 0.1);
+  transform: translateY(-1px);
+  text-shadow: 0 0 8px rgba(0, 242, 255, 0.5);
+}
+
+.premium-link .icon {
+  opacity: 0.6;
+  transition: transform 0.3s ease, opacity 0.3s ease;
+}
+
+.premium-link:hover .icon {
+  opacity: 1;
+  transform: translate(2px, -2px);
+}
+
+.btn-ghost {
+  background: rgba(0, 242, 255, 0.05);
+  border: 1px solid var(--glass-border);
+  padding: 6px 12px;
+  border-radius: 8px;
+  color: var(--neon-cyan);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.3s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.btn-ghost:hover {
+  background: rgba(0, 242, 255, 0.15);
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 15px rgba(0, 242, 255, 0.2);
+  transform: translateY(-1px);
+}
+
 @media (max-width: 480px) {
   :root {
     --glass-bg: rgba(10, 15, 25, 0.9);

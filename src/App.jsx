@@ -317,9 +317,29 @@ const App = () => {
             >
                 <div style={{ minWidth: '250px' }}>
                     <h1 className="neon-text" style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>Research Portfolio</h1>
-                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <User size={14} /> {researcher.name}, {researcher.credentials}
-                    </p>
+                    <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', marginTop: '0.5rem' }}>
+                        <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.2rem', margin: 0 }}>
+                            <User size={14} style={{ marginRight: '0.3rem' }} />
+                            <a
+                                href="https://dhibin-vikash.github.io"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="premium-link"
+                            >
+                                {researcher.name}
+                                <ExternalLink size={12} className="icon" />
+                            </a>
+                            , {researcher.credentials}
+                        </p>
+                        <a
+                            href="https://dhibin-vikash.github.io"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn-ghost"
+                        >
+                            <ExternalLink size={14} /> Visit Website
+                        </a>
+                    </div>
                 </div>
                 <div style={{ textAlign: 'right', minWidth: '250px', maxWidth: '450px' }}>
                     <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '0.25rem' }}>Guided by</p>
