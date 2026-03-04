@@ -441,17 +441,21 @@ const App = () => {
                                         <div style={{ flex: 1, marginRight: '1.5rem' }}>
                                             <h3 style={{ fontSize: '1rem', lineHeight: '1.4', color: 'white' }}>{paper.title}</h3>
                                         </div>
-                                        <span style={{
-                                            padding: '0.4rem 0.8rem',
-                                            borderRadius: '6px',
-                                            fontSize: '0.7rem',
-                                            fontWeight: '800',
-                                            textTransform: 'uppercase',
-                                            flexShrink: 0,
-                                            ...getStatusStyles(paper.status, paper.color, paper.fontColor)
-                                        }}>
-                                            {paper.status}
-                                        </span>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexShrink: 0 }}>
+                                            <span style={{
+                                                padding: '0.4rem 0.8rem',
+                                                borderRadius: '6px',
+                                                fontSize: '0.7rem',
+                                                fontWeight: '800',
+                                                textTransform: 'uppercase',
+                                                ...getStatusStyles(paper.status, paper.color, paper.fontColor)
+                                            }}>
+                                                {paper.status}
+                                            </span>
+                                            <button onClick={() => handleEdit(paper, "papers")} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '0.5rem', opacity: 0.6, transition: 'opacity 0.2s' }} onMouseEnter={e => e.currentTarget.style.opacity = 1} onMouseLeave={e => e.currentTarget.style.opacity = 0.6}>
+                                                <Edit3 size={16} />
+                                            </button>
+                                        </div>
                                     </motion.div>
                                 ))}
                             </div>
