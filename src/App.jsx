@@ -74,8 +74,14 @@ const getStatusStyles = (status, customColor, customTextColor) => {
     };
 };
 
+// ── AUTH GATE ─────────────────────────────────────────────
+// Set to true to re-enable the passcode screen
+const AUTH_ENABLED = false;
+
 const App = () => {
-    const [isAuthenticated, setIsAuthenticated] = useState(localStorage.getItem('auth_access') === 'true');
+    const [isAuthenticated, setIsAuthenticated] = useState(
+        !AUTH_ENABLED || localStorage.getItem('auth_access') === 'true'
+    );
     const [passInput, setPassInput] = useState('');
     const [papers, setPapers] = useState([]);
     const [projects, setProjects] = useState([]);
