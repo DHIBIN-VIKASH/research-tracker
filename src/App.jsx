@@ -75,8 +75,8 @@ const getStatusStyles = (status, customColor, customTextColor) => {
 };
 
 // ── AUTH GATE ─────────────────────────────────────────────
-// Set to true to re-enable the passcode screen
-const AUTH_ENABLED = false;
+// Enable the existing passcode screen for dashboard access.
+const AUTH_ENABLED = true;
 
 const App = () => {
     const [isAuthenticated, setIsAuthenticated] = useState(
