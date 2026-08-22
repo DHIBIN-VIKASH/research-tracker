@@ -1,0 +1,80 @@
+name: Rewrite Gmail Links (one-time)
+
+# ============================================================================
+# One-time fix for links that were written before gmailLink() learned to
+# avoid the slow https://mail.google.com/mail/u/0/#all/<id> path. See the
+# header comment in scripts/rewrite-gmail-links.mjs for the full story.
+#
+# Safe to run more than once — already-optimal links are left alone. Safe to
+# run at any time — it only rewrites link fields, never a paper's status,
+# title, or history content.
+#
+# Two modes, same convention as Backfill Manuscript IDs:
+#   report (default) — prints every link it WOULD change. Writes nothing.
+#   write             — applies the changes.
+# ============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'report = show what would change (safe) · write = apply it'
+        type: choice
+        options: [report, write]
+        default: report
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-tracker-rewrite-links
+  cancel-in-progress: false
+
+jobs:
+  rewrite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci --omit=dev || npm install --omit=dev
+
+      - name: Verify secrets
+        env:
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN_A: ${{ secrets.GMAIL_REFRESH_TOKEN_A }}
+          GMAIL_REFRESH_TOKEN_B: ${{ secrets.GMAIL_REFRESH_TOKEN_B }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          missing=""
+          [ -z "$GMAIL_CLIENT_ID" ]          && missing="$missing GMAIL_CLIENT_ID"
+          [ -z "$GMAIL_CLIENT_SECRET" ]      && missing="$missing GMAIL_CLIENT_SECRET"
+          [ -z "$GMAIL_REFRESH_TOKEN_A" ] && [ -z "$GMAIL_REFRESH_TOKEN_B" ] && missing="$missing GMAIL_REFRESH_TOKEN_A_or_B"
+          [ -z "$FIREBASE_SERVICE_ACCOUNT" ] && missing="$missing FIREBASE_SERVICE_ACCOUNT"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required secrets:$missing"
+            exit 1
+          fi
+
+      - name: Run rewrite
+        env:
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN_A: ${{ secrets.GMAIL_REFRESH_TOKEN_A }}
+          GMAIL_REFRESH_TOKEN_B: ${{ secrets.GMAIL_REFRESH_TOKEN_B }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          if [ "${{ inputs.mode }}" = "write" ]; then
+            node scripts/rewrite-gmail-links.mjs --write
+          else
+            node scripts/rewrite-gmail-links.mjs
+          fi
