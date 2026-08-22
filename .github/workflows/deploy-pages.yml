@@ -1,0 +1,79 @@
+name: Deploy Dashboard to GitHub Pages
+
+# ============================================================================
+# The dashboard is a React app built with Vite. index.html loads
+# ./src/main.jsx directly as a browser module — that only works once Vite has
+# compiled the JSX into plain JS. A browser cannot run JSX on its own.
+#
+# Without this workflow, pushing new source to `main` changes nothing the
+# public ever sees: GitHub Pages just serves the raw, unbuilt files, and the
+# page stays blank. This workflow runs the real build (`npm run build`,
+# producing `dist/`) on GitHub's servers and publishes THAT — so a push to
+# main is the only step you ever need, with no local Node, no local build,
+# no local `npm run deploy`.
+# ============================================================================
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'index.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.js'
+      - 'public/**'
+      - '.github/workflows/deploy-pages.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one deployment in flight at a time; don't cancel one that's already
+# publishing, just queue behind it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Build
+        # This is the step that has never run since the new dashboard code
+        # was pushed. Without it, GitHub Pages serves raw JSX source that no
+        # browser can execute — a permanently blank page regardless of what
+        # is on `main`.
+        run: npm run build
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload build output
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
