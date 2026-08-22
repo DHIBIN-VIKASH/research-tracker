@@ -62,6 +62,20 @@ const MS_ID_PATTERNS = [
     re: /(?:paper|submission|article)\s*(?:number|no\.?|id)?\s*[:#]\s*([A-Z][A-Z0-9]{1,15}(?:[-_.][A-Z0-9]{1,10}){1,5})/i,
     confidence: 0.94,
   },
+  // Purely numeric IDs, still label-anchored. The "World Journal of X" family
+  // (Baishideng-published — Translational Medicine, Experimental Medicine,
+  // Clinical Cases, Radiology, etc.) assigns bare numbers, not the usual
+  // PREFIX-D-YY-NNNNN shape. Every other pattern in this file requires the ID
+  // to start with a letter, so these were silently falling through to
+  // "no manuscript ID" even when the email said "Manuscript NO: 126786" in
+  // plain text. Anchored to the same explicit label as `labelled`, so this is
+  // not a bare-number scan of the whole email — it only fires right after
+  // "manuscript number/no/id", same safety bar as every other pattern here.
+  {
+    name: 'labelled-numeric',
+    re: /(?:manuscript|ms\.?)\s*(?:number|no\.?|id)\s*[:#\-]?\s*(\d{4,9})\b/i,
+    confidence: 0.88,
+  },
   // Editorial Manager canonical shape: PREFIX-D-YY-NNNNN with optional R<n>
   {
     name: 'editorial-manager',
@@ -274,6 +288,35 @@ const RULES = [
     notIf: [],
   },
 
+  // ----- UNSUBMITTED (returned to author, needs action) ------------------
+  // Some editorial systems (ScholarOne in particular) can revert a live
+  // submission back to draft — "GSJ-26-1643 has been unsubmitted" is a real
+  // example from this tracker's own mail. This is not a rejection and not a
+  // revision request: the manuscript has left the review pipeline entirely
+  // and needs the author to act before it re-enters. Distinct status so the
+  // dashboard says what actually happened instead of going silent — before
+  // this rule existed, an email like this matched NO rule at all, produced
+  // no status, and was silently discarded (not even queued for review).
+  {
+    status: 'Unsubmitted (Action Required)',
+    priority: 83,
+    weight: 0.9,
+    urgent: true,
+    patterns: [
+      /\b(?:has\s+been\s+|was\s+)?unsubmitted\b/i,
+      /\bunsubmit(?:ting)?\s+(?:your|the)\s+(?:manuscript|submission)/i,
+    ],
+    // Only past-tense / definite phrasing counts — same reasoning as the
+    // Withdrawn rule below: journals sometimes warn "may be unsubmitted if
+    // documents are not provided", which is a threat, not an event.
+    notIf: [
+      /will\s+be\s+unsubmitted/i,
+      /unsubmitted\s+(?:if|unless)/i,
+      /risk\s+of\s+(?:being\s+)?unsubmitted/i,
+      /(?:may|might|could)\s+be\s+unsubmitted/i,
+    ],
+  },
+
   // ----- MAJOR REVISION --------------------------------------------------
   {
     status: 'Major Revision Requested',
@@ -372,6 +415,11 @@ const RULES = [
     patterns: [
       /invitation\s+to\s+review/i,
       /invite\s+you\s+to\s+review\s+(?:the\s+)?(?:above|following|attached)?\s*manuscript/i,
+      // Plain "request to review [a] manuscript" phrasing — a real,
+      // recurring wording that none of the other invite patterns caught,
+      // so these were landing in Needs Attention as generic noise instead
+      // of being auto-dropped as someone else's paper.
+      /request(?:ed)?\s+to\s+review\s+(?:the\s+|a\s+)?manuscript/i,
       /would\s+you\s+be\s+(?:willing|available)\s+to\s+review/i,
       /agree(?:d)?\s+to\s+review\s+(?:the\s+)?manuscript/i,
       /reviewer\s+(?:invitation|assignment)\s+(?:for|reminder)/i,
@@ -450,6 +498,7 @@ export const TERMINAL_STATUSES = new Set(
 export const STATUS_ORDER = [
   'Yet to start',
   'Submitted',
+  'Unsubmitted (Action Required)',
   'Under Review',
   'Awaiting Editor Decision',
   'Revision Requested',
@@ -559,6 +608,7 @@ function isDecisive(status) {
     'Accepted', 'Accepted (Conditional)', 'Rejected', 'Desk Rejected',
     'Major Revision Requested', 'Minor Revision Requested',
     'Revision Requested', 'Published', 'Withdrawn',
+    'Unsubmitted (Action Required)',
   ].includes(status);
 }
 
