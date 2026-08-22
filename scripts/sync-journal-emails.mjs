@@ -83,9 +83,16 @@ const GMAIL_QUERY = [
   ')',
 ].join(' ');
 
+// `slot` is the Gmail account-switcher index (the /u/<n>/ in the URL) THIS
+// EMAIL occupies in the browser that will actually click these links. Gmail
+// can only guess this — it's local browser state, not anything the API
+// exposes — and a wrong guess forces a slow account-switch redirect on every
+// "Open email" click (see gmailLink() in lib/gmail.mjs). If links are slow to
+// open, open one, look at the URL bar once it finishes loading (you'll see
+// /mail/u/<n>/), and set the matching number below — it's stable per browser.
 const ACCOUNTS = [
-  { key: 'A', label: 'Dhibin', refreshToken: process.env.GMAIL_REFRESH_TOKEN_A },
-  { key: 'B', label: 'Professor', refreshToken: process.env.GMAIL_REFRESH_TOKEN_B },
+  { key: 'A', label: 'Dhibin', refreshToken: process.env.GMAIL_REFRESH_TOKEN_A, slot: 0 },
+  { key: 'B', label: 'Professor', refreshToken: process.env.GMAIL_REFRESH_TOKEN_B, slot: 0 },
 ].filter((a) => a.refreshToken); // a missing token skips that account, not the run
 
 // ---------------------------------------------------------------------------
@@ -379,7 +386,7 @@ async function processMessage({ db, msg, account, accountEmail, byMsId, knownJou
       account: account.label,
       accountEmail,
       messageId: msg.id,
-      link: gmailLink(msg.id, accountEmail),
+      link: gmailLink(msg.id, accountEmail, { inInbox: (msg.labelIds || []).includes('INBOX'), slot: account.slot }),
       subject: truncate(msg.subject, 250),
       from: truncate(msg.from, 200),
       date: msg.date,
@@ -532,7 +539,7 @@ async function queueUnmatched(db, payload, stats) {
     snippet: truncate(msg.snippet, 400),
     receivedAt: Timestamp.fromDate(msg.receivedAt),
     account: account.label,
-    link: gmailLink(msg.id, accountEmail),
+    link: gmailLink(msg.id, accountEmail, { inInbox: (msg.labelIds || []).includes('INBOX'), slot: account.slot }),
     resolved: false,
     createdAt: Timestamp.now(),
   });

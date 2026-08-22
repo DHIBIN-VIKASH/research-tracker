@@ -87,9 +87,12 @@ async function main() {
   const clientId = requireEnv('GMAIL_CLIENT_ID');
   const clientSecret = requireEnv('GMAIL_CLIENT_SECRET');
 
+  // See the matching comment in sync-journal-emails.mjs — `slot` is the
+  // Gmail account-switcher index (/u/<n>/) this address occupies in the
+  // browser that opens these links; set it if links open slowly.
   const accounts = [
-    { key: 'A', label: 'Dhibin', refreshToken: process.env.GMAIL_REFRESH_TOKEN_A },
-    { key: 'B', label: 'Professor', refreshToken: process.env.GMAIL_REFRESH_TOKEN_B },
+    { key: 'A', label: 'Dhibin', refreshToken: process.env.GMAIL_REFRESH_TOKEN_A, slot: 0 },
+    { key: 'B', label: 'Professor', refreshToken: process.env.GMAIL_REFRESH_TOKEN_B, slot: 0 },
   ].filter((a) => a.refreshToken);
 
   if (!accounts.length) throw new Error('No Gmail refresh tokens configured');
@@ -123,7 +126,7 @@ async function main() {
         discovered.set(hit.id, {
           id: hit.id, count: 0, journals: new Set(), accounts: new Set(),
           subjects: [], firstSeen: msg.receivedAt, lastSeen: msg.receivedAt,
-          latestStatus: null, latestStatusAt: null, link: gmailLink(msg.id, accountEmail),
+          latestStatus: null, latestStatusAt: null, link: gmailLink(msg.id, accountEmail, { inInbox: (msg.labelIds || []).includes('INBOX'), slot: account.slot }),
         });
       }
       const rec = discovered.get(hit.id);
@@ -135,7 +138,7 @@ async function main() {
       if (msg.receivedAt < rec.firstSeen) rec.firstSeen = msg.receivedAt;
       if (msg.receivedAt > rec.lastSeen) {
         rec.lastSeen = msg.receivedAt;
-        rec.link = gmailLink(msg.id, accountEmail);
+        rec.link = gmailLink(msg.id, accountEmail, { inInbox: (msg.labelIds || []).includes('INBOX'), slot: account.slot });
       }
       // Track the most recent readable status — a strong hint at where the
       // manuscript actually stands right now.
