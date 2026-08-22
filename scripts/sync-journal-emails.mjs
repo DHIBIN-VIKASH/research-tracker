@@ -33,6 +33,19 @@
 //      Under Review because an old email arrived late. Backward moves out of a
 //      terminal state are queued for review instead of applied.
 //
+// ORDERING (read this one too — it is the difference between "the tracker is
+// right" and "the tracker is right unless two emails landed on the same day")
+// -----------------------------------------------------------------------------
+// Both inboxes are fetched, then MERGED into one list and sorted by the date
+// each message was actually received, before anything is applied. A paper
+// can legitimately receive relevant emails in both mailboxes in the same
+// sync window (Dhibin cc'd on a professor-led submission, or vice versa) —
+// processing "all of inbox A, then all of inbox B" would let whichever
+// account happens to be looped second silently win, regardless of which
+// email is actually more recent. Sorting the merged list once, up front,
+// means "the last status applied" always means "the most recent real event",
+// not "the most recent event in whichever inbox we got to last."
+//
 // DRY RUN
 //   node scripts/sync-journal-emails.mjs --dry-run
 // prints every decision and writes nothing. Use this for the first week.
@@ -140,7 +153,14 @@ async function main() {
   };
   const changeLog = [];
 
-  // --- Process each inbox independently ---------------------------------
+  // --- Fetch every inbox first, then process in TRUE chronological order -
+  // Two accounts processed as separate sequential batches would apply all of
+  // Dhibin's messages before any of the professor's — even if the
+  // professor's status change actually happened earlier in reality. Collect
+  // everything first, tag each message with which account it came from, and
+  // sort the MERGED list by actual received time before applying anything.
+  const allMessages = [];
+
   for (const account of ACCOUNTS) {
     console.log(`\n${'─'.repeat(74)}\n  Inbox ${account.key} (${account.label})\n${'─'.repeat(74)}`);
 
@@ -165,19 +185,32 @@ async function main() {
       stats.errors++;
       continue;
     }
-    messages.sort((a, b) => a.receivedAt - b.receivedAt);
+
     stats.fetched += messages.length;
     console.log(`  messages matching query: ${messages.length}`);
 
     for (const msg of messages) {
-      try {
-        await processMessage({
-          db, msg, account, accountEmail, byMsId, knownJournals, stats, changeLog,
-        });
-      } catch (err) {
-        stats.errors++;
-        console.error(`  ✖ error on "${truncate(msg.subject, 60)}": ${err.message}`);
-      }
+      allMessages.push({ msg, account, accountEmail });
+    }
+  }
+
+  // Global chronological order across BOTH inboxes. This is what makes "the
+  // last status applied wins" actually mean "the most recent real event" —
+  // not "the most recent event in whichever inbox happened to be looped
+  // last." Sort is stable and cheap; correctness here matters far more than
+  // the microseconds it costs.
+  allMessages.sort((a, b) => a.msg.receivedAt - b.msg.receivedAt);
+
+  console.log(`\n${'─'.repeat(74)}\n  Processing ${allMessages.length} message(s), oldest → newest\n${'─'.repeat(74)}`);
+
+  for (const { msg, account, accountEmail } of allMessages) {
+    try {
+      await processMessage({
+        db, msg, account, accountEmail, byMsId, knownJournals, stats, changeLog,
+      });
+    } catch (err) {
+      stats.errors++;
+      console.error(`  ✖ error on "${truncate(msg.subject, 60)}": ${err.message}`);
     }
   }
 
