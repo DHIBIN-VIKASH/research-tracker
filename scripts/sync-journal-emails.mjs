@@ -165,7 +165,7 @@ async function main() {
       stats.errors++;
       continue;
     }
-
+    messages.sort((a, b) => a.receivedAt - b.receivedAt);
     stats.fetched += messages.length;
     console.log(`  messages matching query: ${messages.length}`);
 
