@@ -33,18 +33,26 @@ import {
     Plus, Trash2, Edit3, Search, BookOpen, User, GraduationCap, ExternalLink,
     X, Lock, ShieldCheck, Clock, AlertTriangle, CheckCircle2, XCircle, Mail,
     History, Inbox, RefreshCw, Calendar, FileText, Zap, TrendingUp, Send,
-    CornerDownRight, Award, Hourglass, PenLine,
+    CornerDownRight, Award, Hourglass, PenLine, LogIn, LogOut,
 } from 'lucide-react';
 import {
     db, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy,
+    auth, googleProvider, signInWithPopup, onAuthStateChanged, signOut,
 } from './firebase';
 
 // ── CONFIG ─────────────────────────────────────────────────────────────────
-// Set true once Firestore rules lock browser writes (see firestore.rules).
-// With rules deployed, add/edit/delete cannot work from a browser — this hides
-// the controls rather than presenting buttons that silently fail.
+// Emergency kill switch: set true to hide every edit control regardless of
+// who is signed in. Firestore rules are the real enforcement (see
+// firestore.rules) — this only controls whether the UI offers buttons that
+// would otherwise just fail server-side.
 const READ_ONLY = false;
 const PASSCODE_ENABLED = true;
+
+// Editors allowed to add/edit/delete papers and projects, enforced both here
+// (hides the buttons) and in firestore.rules -> isEditor() (the real gate —
+// a hidden button is not security, the server-side check is). Keep these two
+// lists in sync.
+const EDITOR_EMAILS = ['dhibinvikash1@gmail.com', 'drsathishmuthu@gmail.com'];
 
 // ── STATUS SYSTEM ──────────────────────────────────────────────────────────
 // One canonical vocabulary, shared with scripts/lib/classify.mjs.
@@ -172,6 +180,13 @@ export default function App() {
     const [passInput, setPassInput] = useState('');
     const [authError, setAuthError] = useState('');
 
+    // Separate from the passcode gate above. The passcode is cosmetic (hides
+    // the UI on this device); this is the real, server-enforced identity that
+    // firestore.rules checks before allowing any write.
+    const [user, setUser] = useState(null);
+    const [authChecked, setAuthChecked] = useState(false);
+    const [signInError, setSignInError] = useState('');
+
     const [papers, setPapers] = useState([]);
     const [projects, setProjects] = useState([]);
     const [unmatched, setUnmatched] = useState([]);
@@ -220,6 +235,20 @@ export default function App() {
 
         return () => subs.forEach((u) => u());
     }, [isAuthenticated]);
+
+    useEffect(() => {
+        const unsub = onAuthStateChanged(auth, (u) => { setUser(u); setAuthChecked(true); });
+        return unsub;
+    }, []);
+
+    const canEdit = !READ_ONLY && !!user && EDITOR_EMAILS.includes((user.email || '').toLowerCase());
+
+    const handleSignIn = async () => {
+        setSignInError('');
+        try { await signInWithPopup(auth, googleProvider); }
+        catch (e) { setSignInError(e.code === 'auth/popup-closed-by-user' ? '' : `Sign-in failed: ${e.message}`); }
+    };
+    const handleSignOut = async () => { try { await signOut(auth); } catch (e) { setSignInError(`Sign-out failed: ${e.message}`); } };
 
     const enriched = useMemo(() => papers.map((p) => {
         const deadline = toDate(p.deadline);
@@ -339,7 +368,9 @@ export default function App() {
     return (
         <div style={{ padding: 'clamp(1rem, 3vw, 2.25rem)', maxWidth: 1500, margin: '0 auto' }}>
             <TopBar researcher={researcher} lastSync={lastSync}
-                onLock={() => { localStorage.removeItem('auth_access'); setIsAuthenticated(false); }} />
+                onLock={() => { localStorage.removeItem('auth_access'); setIsAuthenticated(false); }}
+                user={user} authChecked={authChecked} canEdit={canEdit}
+                signInError={signInError} onSignIn={handleSignIn} onSignOut={handleSignOut} />
 
             {error && (
                 <div style={{ background: TONE.dead.bg, border: `1px solid ${TONE.dead.bd}`, color: TONE.dead.fg, padding: '.85rem 1.1rem', borderRadius: 'var(--radius-sm)', marginBottom: '1.4rem', fontSize: '.85rem', display: 'flex', gap: '.6rem', alignItems: 'center' }}>
@@ -359,17 +390,17 @@ export default function App() {
                     attention: enriched.filter((p) => statusMeta(p.status).tone === 'action').length,
                     published: stats.published, closed: stats.rejected, all: enriched.length,
                 }}
-                onAdd={() => { setModalTarget('papers'); setIsAddingMode(true); }} />
+                onAdd={() => { setModalTarget('papers'); setIsAddingMode(true); }} canEdit={canEdit} />
 
             <PaperList papers={visiblePapers} loading={loading} onOpenTimeline={setTimelineFor}
                 onEdit={(p) => { setModalTarget('papers'); setEditingItem(p); }}
-                onDelete={(id) => handleDelete('papers', id)} />
+                onDelete={(id) => handleDelete('papers', id)} canEdit={canEdit} />
 
             {projects.length > 0 && (
                 <ProjectSection projects={projects}
                     onEdit={(p) => { setModalTarget('projects'); setEditingItem(p); }}
                     onDelete={(id) => handleDelete('projects', id)}
-                    onAdd={() => { setModalTarget('projects'); setIsAddingMode(true); }} />
+                    onAdd={() => { setModalTarget('projects'); setIsAddingMode(true); }} canEdit={canEdit} />
             )}
 
             <AnimatePresence>
@@ -394,7 +425,7 @@ export default function App() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-function TopBar({ researcher, lastSync, onLock }) {
+function TopBar({ researcher, lastSync, onLock, user, authChecked, canEdit, signInError, onSignIn, onSignOut }) {
     const finished = lastSync?.finishedAt;
     // A silently dead cron is what makes an automated tracker dangerous: stale
     // data that looks current. Anything older than 48h gets called out.
@@ -425,10 +456,25 @@ function TopBar({ researcher, lastSync, onLock }) {
                         style={{ display: 'inline-flex', alignItems: 'center', gap: '.4rem', fontSize: '.68rem', color: tone.fg, background: tone.bg, border: `1px solid ${tone.bd}`, padding: '.3rem .6rem', borderRadius: 99, fontWeight: 700, letterSpacing: '.05em' }}>
                         <RefreshCw size={11} /> {finished ? `SYNCED ${relTime(finished).toUpperCase()}` : 'SYNC NEVER RAN'}
                     </span>
+                    {authChecked && (
+                        user ? (
+                            <button onClick={onSignOut} title={canEdit ? 'Signed in as editor' : `${user.email} is not on the editor list`}
+                                style={{ background: canEdit ? TONE.good.bg : TONE.pending.bg, border: `1px solid ${canEdit ? TONE.good.bd : TONE.pending.bd}`, color: canEdit ? TONE.good.fg : TONE.pending.fg, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '.4rem', fontSize: '.68rem', fontFamily: 'inherit', padding: '.3rem .6rem', borderRadius: 99, fontWeight: 700, letterSpacing: '.05em' }}>
+                                <ShieldCheck size={12} /> {canEdit ? 'EDITOR' : 'VIEW ONLY'} · <LogOut size={11} />
+                            </button>
+                        ) : (
+                            <button onClick={onSignIn} style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '.4rem', fontSize: '.68rem', fontFamily: 'inherit', padding: '.3rem .6rem', borderRadius: 99, fontWeight: 700, letterSpacing: '.05em' }}>
+                                <LogIn size={12} /> EDITOR SIGN-IN
+                            </button>
+                        )
+                    )}
                     <button onClick={onLock} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '.3rem', fontSize: '.73rem', fontFamily: 'inherit' }}>
                         <Lock size={12} /> Lock
                     </button>
                 </div>
+                {signInError && (
+                    <p style={{ color: TONE.dead.fg, fontSize: '.7rem', maxWidth: 320, textAlign: 'right' }}>{signInError}</p>
+                )}
             </div>
         </motion.header>
     );
@@ -599,7 +645,7 @@ function StatusBadge({ status, small, customColor, customTextColor }) {
     );
 }
 
-function Toolbar({ searchTerm, setSearchTerm, stageFilter, setStageFilter, counts, onAdd }) {
+function Toolbar({ searchTerm, setSearchTerm, stageFilter, setStageFilter, counts, onAdd, canEdit }) {
     const filters = [
         { key: 'active', label: 'Active', n: counts.active },
         { key: 'attention', label: 'Needs action', n: counts.attention },
@@ -625,12 +671,12 @@ function Toolbar({ searchTerm, setSearchTerm, stageFilter, setStageFilter, count
                     );
                 })}
             </div>
-            {!READ_ONLY && <button className="btn-primary" onClick={onAdd}><Plus size={16} /> New paper</button>}
+            {canEdit && <button className="btn-primary" onClick={onAdd}><Plus size={16} /> New paper</button>}
         </div>
     );
 }
 
-function PaperList({ papers, loading, onOpenTimeline, onEdit, onDelete }) {
+function PaperList({ papers, loading, onOpenTimeline, onEdit, onDelete, canEdit }) {
     if (loading) return <div className="glass-card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>Loading…</div>;
     if (!papers.length) return <div className="glass-card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>No papers match this filter.</div>;
 
@@ -672,7 +718,7 @@ function PaperList({ papers, loading, onOpenTimeline, onEdit, onDelete }) {
                                 )}
                                 <StatusBadge status={p.status} customColor={p.color} customTextColor={p.fontColor} />
                                 {p.autoUpdated && <span title="Set automatically from a journal email" style={{ color: 'var(--text-faint)', display: 'inline-flex' }}><Zap size={12} /></span>}
-                                {!READ_ONLY && (
+                                {canEdit && (
                                     <>
                                         <button onClick={() => onEdit(p)} style={iconBtn} title="Edit"><Edit3 size={14} /></button>
                                         <button onClick={() => onDelete(p.firestoreId)} style={{ ...iconBtn, color: TONE.dead.fg }} title="Delete"><Trash2 size={14} /></button>
@@ -860,14 +906,14 @@ function EditModal({ isAdding, item, onChange, onSave, onClose }) {
     );
 }
 
-function ProjectSection({ projects, onEdit, onDelete, onAdd }) {
+function ProjectSection({ projects, onEdit, onDelete, onAdd, canEdit }) {
     return (
         <section style={{ marginBottom: '2.5rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.9rem', flexWrap: 'wrap', gap: '.8rem' }}>
                 <h2 style={{ fontSize: '.9rem', display: 'flex', alignItems: 'center', gap: '.55rem', textTransform: 'uppercase', letterSpacing: '.1em' }}>
                     <BookOpen size={18} color="var(--accent)" /> Other projects
                 </h2>
-                {!READ_ONLY && <button className="btn-primary" onClick={onAdd}><Plus size={16} /> New project</button>}
+                {canEdit && <button className="btn-primary" onClick={onAdd}><Plus size={16} /> New project</button>}
             </div>
             <div style={{ display: 'grid', gap: '.55rem' }}>
                 {projects.map((p) => (
@@ -875,7 +921,7 @@ function ProjectSection({ projects, onEdit, onDelete, onAdd }) {
                         <span className="futuristic-font" style={{ color: 'var(--text-faint)', fontWeight: 700, fontSize: '.82rem', minWidth: 28 }}>#{p.id}</span>
                         <span style={{ flex: '1 1 260px', fontSize: '.88rem', color: 'var(--text-primary)' }}>{p.title}</span>
                         <StatusBadge status={p.status} customColor={p.color} customTextColor={p.fontColor} />
-                        {!READ_ONLY && (
+                        {canEdit && (
                             <>
                                 <button onClick={() => onEdit(p)} style={iconBtn}><Edit3 size={14} /></button>
                                 <button onClick={() => onDelete(p.firestoreId)} style={{ ...iconBtn, color: TONE.dead.fg }}><Trash2 size={14} /></button>

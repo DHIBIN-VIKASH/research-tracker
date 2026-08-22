@@ -1,5 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
 import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
 
 // ============================================================================
 // Firebase configuration — research-tracker-sync-9a424
@@ -17,11 +18,12 @@ import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot
 // What DOES protect the data is firestore.rules. The previous project had the
 // same public config but effectively no rules, which meant anyone who read the
 // repo could download or overwrite every paper. That is closed here: writes are
-// denied to browsers entirely, and the daily sync writes via the Admin SDK
-// (which bypasses rules by design).
+// gated on Firebase Auth (isEditor(), see firestore.rules) — only signed-in
+// editors on the allowlist can write, and the daily sync writes via the Admin
+// SDK (which bypasses rules by design regardless).
 //
-// If you ever see the dashboard's add/edit buttons fail, that is the rules
-// working as intended — see the options documented in firestore.rules.
+// If you ever see the dashboard's add/edit buttons fail, that means you are
+// not signed in as an editor — see the "Sign in" control in the top bar.
 // ============================================================================
 
 const firebaseConfig = {
@@ -35,5 +37,10 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
+const auth = getAuth(app);
+const googleProvider = new GoogleAuthProvider();
 
-export { db, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy };
+export {
+    db, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy,
+    auth, googleProvider, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut,
+};

@@ -19,36 +19,36 @@ rules_version = '2';
 //
 // These rules move enforcement to the server, where it actually holds.
 //
-// THE MODEL
-// ---------
+// THE MODEL (Option B — Firebase Auth, now live)
+// ------------------------------------------------
 //   READ   -> open to anyone. The dashboard is a public web page with no
 //             login, so the browser must be able to read. If you would not
 //             want a title/status published, do not put it in Firestore.
 //             (See "IF YOUR DATA IS CONFIDENTIAL" below to lock reads too.)
 //
-//   WRITE  -> service account ONLY. The GitHub Actions sync job authenticates
-//             with the Firebase Admin SDK, which bypasses these rules entirely
-//             by design. Browsers get no write access at all, which means the
-//             attack above (public config -> overwrite your papers) is closed.
+//   WRITE  -> two paths, both enforced server-side:
+//               1. The GitHub Actions sync job authenticates with the
+//                  Firebase Admin SDK, which bypasses these rules entirely
+//                  by design — the daily automated sync is unaffected.
+//               2. A browser client may write ONLY if it is signed in via
+//                  Google (App.jsx's "Editor sign-in" button) AND the signed-
+//                  in email is in isEditor()'s allowlist below. Everyone else
+//                  — signed out, or signed in with a different Google account
+//                  — gets the same "write denied" as before.
 //
-// TRADE-OFF YOU ARE ACCEPTING — READ THIS
-// ----------------------------------------
-// Locking writes means the "New Publication" / edit / delete buttons in the
-// dashboard WILL STOP WORKING. That is deliberate: an unauthenticated write
-// path is exactly the hole being closed. You have three ways forward:
+// This closes the earlier hole (public config -> overwrite your papers) while
+// giving you and your professor working Add/Edit/Delete buttons again.
 //
-//   Option A (fastest, recommended to start): edit papers in the Firebase
-//     console at console.firebase.google.com. The daily sync handles status
-//     changes automatically; you only touch the console to ADD a new paper
-//     or set its manuscriptId. That is a few times a month, not daily.
+// TO ADD OR REMOVE AN EDITOR: edit the email list in isEditor() below AND the
+// EDITOR_EMAILS constant in src/App.jsx — keep the two in sync, since App.jsx
+// hides the buttons client-side (cosmetic) while this file is what actually
+// enforces it (real).
 //
-//   Option B (best long-term): turn on Firebase Authentication, add yourself
-//     and your professor as users, and switch the write rules below to the
-//     commented-out `isEditor()` version. The dashboard buttons work again,
-//     but only for the two of you, enforced server-side.
-//
-//   Option C: keep writes open (do NOT do this). Your data stays editable by
-//     anyone on the internet who finds the repo.
+// REQUIRED ONE-TIME SETUP (Firebase console, no CLI):
+//   1. Authentication -> Sign-in method -> enable "Google".
+//   2. Authentication -> Settings -> Authorized domains -> add
+//      dhibin-vikash.github.io (and localhost, if you test locally).
+//   3. Paste this whole file into Firestore Database -> Rules -> Publish.
 //
 // DEPLOY WITH
 //   firebase deploy --only firestore:rules
@@ -61,14 +61,18 @@ service cloud.firestore {
     // ---------------------------------------------------------------------
     // Helper: is this request from a signed-in editor?
     //
-    // Only used if you adopt Option B above. Add each editor's Firebase Auth
-    // UID to the list. Find UIDs in Firebase console -> Authentication -> Users.
+    // Matched on email, not UID — a new editor just needs their Google
+    // account email added here, with no separate "look up my UID" step.
+    // request.auth.token.email_verified is also checked: Google sign-in
+    // always verifies the email, so this only excludes exotic auth methods
+    // that could otherwise spoof an unverified address.
     // ---------------------------------------------------------------------
     function isEditor() {
       return request.auth != null
-        && request.auth.uid in [
-             // 'PASTE_DHIBIN_FIREBASE_UID_HERE',
-             // 'PASTE_PROFESSOR_FIREBASE_UID_HERE'
+        && request.auth.token.email_verified == true
+        && request.auth.token.email in [
+             'dhibinvikash1@gmail.com',
+             'drsathishmuthu@gmail.com'
            ];
     }
 
@@ -94,15 +98,13 @@ service cloud.firestore {
     match /papers/{paperId} {
       allow read: if true;
 
-      // Writes blocked for all browser clients. The GitHub Actions sync uses
-      // the Admin SDK and is unaffected by this line.
-      allow write: if false;
-
-      // --- Option B: swap the line above for these three when you enable
-      // --- Firebase Auth and fill in the UIDs in isEditor().
-      // allow create: if isEditor() && isValidPaper();
-      // allow update: if isEditor() && isValidPaper();
-      // allow delete: if isEditor();
+      // Signed-in editors can create/update with a sane shape, and delete.
+      // Everyone else (signed out, or signed in but not on the list) is
+      // denied — same as the sync job's Admin SDK path, which bypasses this
+      // entirely and is unaffected either way.
+      allow create: if isEditor() && isValidPaper();
+      allow update: if isEditor() && isValidPaper();
+      allow delete: if isEditor();
     }
 
     // ---------------------------------------------------------------------
@@ -110,12 +112,9 @@ service cloud.firestore {
     // ---------------------------------------------------------------------
     match /projects/{projectId} {
       allow read: if true;
-      allow write: if false;
-
-      // --- Option B:
-      // allow create: if isEditor() && isValidPaper();
-      // allow update: if isEditor() && isValidPaper();
-      // allow delete: if isEditor();
+      allow create: if isEditor() && isValidPaper();
+      allow update: if isEditor() && isValidPaper();
+      allow delete: if isEditor();
     }
 
     // ---------------------------------------------------------------------
@@ -126,8 +125,9 @@ service cloud.firestore {
     // script is unsure, the email lands HERE instead of being guessed onto
     // the wrong manuscript. The dashboard shows these for you to resolve.
     //
-    // Written only by the sync (Admin SDK). Readable so the dashboard can
-    // display the queue.
+    // Written by the sync (Admin SDK) and, once the dashboard grows a
+    // "resolve" action (Phase 2), by signed-in editors marking an item
+    // resolved. For now, still Admin-SDK-only.
     // ---------------------------------------------------------------------
     match /unmatched/{itemId} {
       allow read: if true;
@@ -176,9 +176,9 @@ service cloud.firestore {
 // what you are working on before it is public. `allow read: if true` means
 // anyone with your project ID can read every title and status.
 //
-// If that matters, enable Firebase Auth (Option B), then change every
-// `allow read: if true` above to `allow read: if request.auth != null;`.
-// The dashboard will then require a real login instead of the localStorage
-// passcode. Say the word and I will wire the Firebase Auth login screen into
-// App.jsx for you.
+// If that matters, change every `allow read: if true` above to
+// `allow read: if request.auth != null;`. Editor sign-in already exists
+// (App.jsx), so this is a one-line change per collection — but note it will
+// also block the passcode-only "view" path, since a passcode is not a real
+// Firebase Auth session. Say the word if you want that wired up too.
 // ============================================================================
