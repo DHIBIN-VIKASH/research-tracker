@@ -1,280 +1,187 @@
 #!/usr/bin/env node
 // ============================================================================
-// test-classifier.mjs — adversarial tests for the classification logic
+// test-classifier.mjs — runs the regression corpus against the classifier
 // ============================================================================
 //
-// Run before trusting the sync unattended, and again any time you edit a rule:
-//   node scripts/test-classifier.mjs
+//   node scripts/test-classifier.mjs              run everything
+//   node scripts/test-classifier.mjs --only <id>  run one case, verbosely
+//   node scripts/test-classifier.mjs --verbose    show evidence for every case
+//   node scripts/test-classifier.mjs --known      list documented bugs and exit
 //
-// These are not happy-path tests. Nearly every case here is drawn from a way
-// real editorial email trips up naive keyword matching:
+// EXIT CODES
+//   0  all real assertions passed (documented bugs may still be failing)
+//   1  a real assertion failed — do NOT run the sync live
 //
-//   · rejection language quoted inside a revision invitation
-//   · "accepted for review" (not an acceptance)
-//   · reviewer invitations for OTHER people's manuscripts
-//   · last month's status quoted at the bottom of this month's decision
-//   · desk rejection vs post-review rejection
-//   · revision suffixes (R1/R2) that must resolve to the same manuscript
-//
-// A failure here is a bug that would silently corrupt your tracker. Treat red
-// output as a blocker, not a warning.
+// A case marked `known` in fixtures.mjs is an expected failure tied to a
+// documented bug. It is reported but does not fail the build, so the corpus can
+// describe reality before the fix lands. When such a case starts passing the
+// runner reports XPASS loudly — that is your signal to delete the `known` field
+// so the case becomes load-bearing.
 // ============================================================================
 
-import { classifyStatus, extractManuscriptId, normaliseId, isRelevant, extractJournal } from './lib/classify.mjs';
+import {
+  classifyStatus,
+  extractManuscriptId,
+  isRelevant,
+  extractJournal,
+} from './lib/classify.mjs';
+import { GROUPS, ALL_CASES } from './lib/fixtures.mjs';
 
-let passed = 0;
-let failed = 0;
+const argv = process.argv.slice(2);
+const flag = (n) => argv.includes(n);
+const arg = (n) => { const i = argv.indexOf(n); return i === -1 ? null : argv[i + 1]; };
+
+const ONLY = arg('--only');
+const VERBOSE = flag('--verbose');
+
+const C = {
+  reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',
+  green: '\x1b[32m', red: '\x1b[31m', yellow: '\x1b[33m',
+  cyan: '\x1b[36m', magenta: '\x1b[35m',
+};
+
+// ---------------------------------------------------------------------------
+// --known: list documented bugs without running anything
+// ---------------------------------------------------------------------------
+if (flag('--known')) {
+  const known = ALL_CASES.filter((c) => c.known);
+  console.log(`\n${C.yellow}${known.length} documented bug${known.length === 1 ? '' : 's'}:${C.reset}\n`);
+  for (const c of known) console.log(`  ${C.bold}${c.id}${C.reset}\n    ${c.known}\n`);
+  process.exit(0);
+}
+
+// ---------------------------------------------------------------------------
+// Run one fixture. Only asserts the keys present in `expect`.
+// ---------------------------------------------------------------------------
+function runCase(tc) {
+  const email = tc.email;
+  const want = tc.expect || {};
+  const got = {};
+  const diffs = [];
+
+  // Each probe is computed only if asserted, so an unrelated crash in one
+  // extractor cannot mask an assertion about another.
+  if ('relevant' in want) got.relevant = isRelevant(email).relevant;
+  if ('msId' in want) got.msId = extractManuscriptId(email.subject || '', email.body || '')?.id ?? null;
+  if ('journal' in want) got.journal = extractJournal(email, tc.knownJournals || []);
+
+  const needsClassify = ['status', 'urgent', 'ignore', 'ambiguous'].some((k) => k in want);
+  let result = null;
+  if (needsClassify) {
+    result = classifyStatus(email);
+    if ('status' in want) got.status = result.status;
+    if ('urgent' in want) got.urgent = !!result.urgent;
+    if ('ignore' in want) got.ignore = !!result.ignore;
+    if ('ambiguous' in want) got.ambiguous = !!result.ambiguous;
+  }
+
+  for (const k of Object.keys(want)) {
+    if (got[k] !== want[k]) {
+      diffs.push({ field: k, want: want[k], got: got[k] });
+    }
+  }
+
+  return { ok: diffs.length === 0, diffs, result, got };
+}
+
+// ---------------------------------------------------------------------------
+// Report
+// ---------------------------------------------------------------------------
+const tally = { pass: 0, fail: 0, xfail: 0, xpass: 0 };
 const failures = [];
+const xpasses = [];
 
-function check(name, actual, expected) {
-  const ok = actual === expected;
-  if (ok) { passed++; console.log(`  \x1b[32m✔\x1b[0m ${name}`); }
-  else {
-    failed++;
-    failures.push({ name, actual, expected });
-    console.log(`  \x1b[31m✖\x1b[0m ${name}`);
-    console.log(`      expected: ${expected}`);
-    console.log(`      actual  : ${actual}`);
+console.log(`\n${C.bold}Regression corpus${C.reset} ${C.dim}${ALL_CASES.length} cases${C.reset}`);
+
+for (const group of GROUPS) {
+  const cases = ONLY ? group.cases.filter((c) => c.id === ONLY) : group.cases;
+  if (!cases.length) continue;
+
+  console.log(`\n${C.cyan}${'─'.repeat(74)}\n ${group.title}\n${'─'.repeat(74)}${C.reset}`);
+
+  for (const tc of cases) {
+    const { ok, diffs, result, got } = runCase(tc);
+
+    if (tc.known) {
+      if (ok) {
+        tally.xpass++;
+        xpasses.push(tc);
+        console.log(`  ${C.magenta}XPASS${C.reset} ${tc.name}`);
+        console.log(`        ${C.magenta}bug appears fixed — delete the \`known\` field on ${tc.id}${C.reset}`);
+      } else {
+        tally.xfail++;
+        console.log(`  ${C.yellow}known${C.reset} ${C.dim}${tc.name}${C.reset}`);
+        for (const d of diffs) {
+          console.log(`        ${C.dim}${d.field}: want ${fmt(d.want)}, got ${fmt(d.got)}${C.reset}`);
+        }
+      }
+    } else if (ok) {
+      tally.pass++;
+      console.log(`  ${C.green}✔${C.reset} ${tc.name}`);
+    } else {
+      tally.fail++;
+      failures.push({ tc, diffs, result });
+      console.log(`  ${C.red}✖${C.reset} ${C.bold}${tc.name}${C.reset}  ${C.dim}[${tc.id}]${C.reset}`);
+      for (const d of diffs) {
+        console.log(`        ${d.field}: want ${C.green}${fmt(d.want)}${C.reset}, got ${C.red}${fmt(d.got)}${C.reset}`);
+      }
+      if (result?.evidence) console.log(`        ${C.dim}evidence: ${result.evidence}${C.reset}`);
+      if (result?.competing?.length) {
+        console.log(`        ${C.dim}competing: ${result.competing.map((c) => `${c.status}(${c.score})`).join('  ')}${C.reset}`);
+      }
+    }
+
+    if (VERBOSE || ONLY) {
+      if (result) {
+        console.log(`        ${C.dim}→ status=${fmt(result.status)} conf=${result.confidence} ` +
+                    `urgent=${!!result.urgent} ignore=${!!result.ignore} ambiguous=${!!result.ambiguous}${C.reset}`);
+        if (result.evidence) console.log(`        ${C.dim}→ evidence: ${result.evidence}${C.reset}`);
+      }
+      if (tc.note) console.log(`        ${C.dim}note: ${tc.note}${C.reset}`);
+    }
   }
 }
 
-function section(title) {
-  console.log(`\n\x1b[36m${'─'.repeat(70)}\n  ${title}\n${'─'.repeat(70)}\x1b[0m`);
+function fmt(v) {
+  if (v === null) return 'null';
+  if (v === undefined) return 'undefined';
+  return typeof v === 'string' ? `"${v}"` : String(v);
 }
 
-// ===========================================================================
-section('STATUS: acceptance — the highest-stakes call');
-// ===========================================================================
+// ---------------------------------------------------------------------------
+console.log(`\n${'═'.repeat(74)}`);
+const bits = [
+  `${C.green}${tally.pass} passed${C.reset}`,
+  tally.fail ? `${C.red}${tally.fail} failed${C.reset}` : `${C.dim}0 failed${C.reset}`,
+];
+if (tally.xfail) bits.push(`${C.yellow}${tally.xfail} known bug${tally.xfail === 1 ? '' : 's'}${C.reset}`);
+if (tally.xpass) bits.push(`${C.magenta}${tally.xpass} XPASS${C.reset}`);
+console.log('  ' + bits.join('   '));
+console.log('═'.repeat(74));
 
-check('plain acceptance',
-  classifyStatus({
-    subject: 'Decision on JOSR-D-25-00417',
-    body: 'Dear Dr Vikash, I am pleased to inform you that your manuscript "Outcomes of Spinal Fusion" has been accepted for publication in the Journal of Orthopaedic Surgery and Research.',
-  }).status,
-  'Accepted');
+if (tally.xfail) {
+  console.log(`\n${C.yellow}Documented bugs still open${C.reset} ${C.dim}(run --known for detail)${C.reset}`);
+  for (const c of ALL_CASES.filter((c) => c.known)) {
+    const first = c.known.split(':')[0];
+    console.log(`  ${C.dim}·${C.reset} ${first} — ${c.id}`);
+  }
+}
 
-check('"accepted for review" is NOT an acceptance',
-  classifyStatus({
-    subject: 'Submission received JOSR-D-25-00417',
-    body: 'Thank you for your submission. Your manuscript has been accepted for review and assigned to an editor.',
-  }).status,
-  'Submitted');
+if (tally.xpass) {
+  console.log(`\n${C.magenta}${tally.xpass} case(s) now pass that were marked as known bugs.${C.reset}`);
+  console.log(`${C.dim}Remove the \`known\` field so they become load-bearing:${C.reset}`);
+  for (const c of xpasses) console.log(`  · ${c.id}`);
+}
 
-check('"cannot accept" is not an acceptance',
-  classifyStatus({
-    subject: 'Decision on ESJ-D-25-00112',
-    body: 'We regret to inform you that we cannot accept your manuscript for publication.',
-  }).status,
-  'Rejected');
-
-check('conditional acceptance is distinguished',
-  classifyStatus({
-    subject: 'Decision on SPINE-25-0442',
-    body: 'Your manuscript has been conditionally accepted subject to minor revision of the statistics section.',
-  }).status,
-  'Accepted (Conditional)');
-
-// ===========================================================================
-section('STATUS: rejection vs revision — the classic confusion');
-// ===========================================================================
-
-check('revision invite containing the word "rejection" is a REVISION not a rejection',
-  classifyStatus({
-    subject: 'Decision on JOSR-D-25-00417',
-    body: 'Although one reviewer recommended rejection, the editor invites you to submit a revised manuscript addressing the comments below. Please address the reviewers comments within 60 days.',
-  }).status,
-  'Revision Requested');
-
-check('threatened withdrawal is NOT a withdrawal (live paper must not look dead)',
-  classifyStatus({
-    subject: 'Reminder: copyright form outstanding',
-    body: 'Please sign the copyright agreement. Your submission will be withdrawn unless the form is returned within 7 days.',
-  }).status,
-  'Action Required');
-
-check('actual withdrawal still detected',
-  classifyStatus({
-    subject: 'Withdrawal confirmed ESJ-D-25-00112',
-    body: 'As requested, your manuscript has been withdrawn from consideration.',
-  }).status,
-  'Withdrawn');
-
-check('major revision detected',
-  classifyStatus({
-    subject: 'JOSR-D-25-00417 - Major Revision Required',
-    body: 'Your manuscript requires major revision before it can be considered further.',
-  }).status,
-  'Major Revision Requested');
-
-check('minor revision detected',
-  classifyStatus({
-    subject: 'Decision: Minor Revision - ESJ-D-25-00112',
-    body: 'The reviewers have suggested minor revision. Please address these points.',
-  }).status,
-  'Minor Revision Requested');
-
-check('desk rejection separated from ordinary rejection',
-  classifyStatus({
-    subject: 'Your submission to Asian Spine Journal',
-    body: 'After editorial screening we have decided not to proceed with your manuscript without external review, as it falls outside our current scope.',
-  }).status,
-  'Desk Rejected');
-
-check('plain post-review rejection',
-  classifyStatus({
-    subject: 'Decision on ASJ-D-25-00901',
-    body: 'We regret to inform you that after careful consideration your manuscript has been rejected. The reviewers comments are appended.',
-  }).status,
-  'Rejected');
-
-check('boilerplate "if your paper is rejected" does not trigger rejection',
-  classifyStatus({
-    subject: 'Submission confirmation IJO-25-0033',
-    body: 'Thank you for your submission. Please note: if your manuscript is rejected you may appeal within 30 days. Your manuscript has been received and will be processed shortly.',
-  }).status,
-  'Submitted');
-
-// ===========================================================================
-section('STATUS: reviewer invitations must be IGNORED, not tracked');
-// ===========================================================================
-
-check('reviewer invitation is flagged ignore',
-  classifyStatus({
-    subject: 'Invitation to review manuscript JOSR-D-25-00988',
-    body: 'Dear Dr Muthu, we would be grateful if you would agree to review the manuscript titled "Biomechanics of..." for our journal.',
-  }).ignore,
-  true);
-
-check('reviewer reminder is flagged ignore',
-  classifyStatus({
-    subject: 'Reminder: your review is due',
-    body: 'Thank you for agreeing to review the manuscript ESJ-D-25-00777. Your review is due in 3 days.',
-  }).ignore,
-  true);
-
-check('"your manuscript is under review" is NOT a reviewer invite',
-  classifyStatus({
-    subject: 'Status update JOSR-D-25-00417',
-    body: 'Your manuscript is under review. We will contact you when a decision is reached.',
-  }).ignore,
-  false);
-
-// ===========================================================================
-section('STATUS: quoted history must not override fresh content');
-// ===========================================================================
-
-check('acceptance wins over quoted "under review" history',
-  classifyStatus({
-    subject: 'Decision on JOSR-D-25-00417',
-    body: `I am pleased to inform you that your manuscript has been accepted for publication.
-
-On Mon, 12 May 2025, Editorial Office wrote:
-> Your manuscript is currently under review and has been sent out for peer review.
-> Reviewers have been assigned.`,
-  }).status,
-  'Accepted');
-
-// ===========================================================================
-section('STATUS: process states');
-// ===========================================================================
-
-check('under review',
-  classifyStatus({ subject: 'JOSR-D-25-00417', body: 'Your manuscript has been sent out for peer review.' }).status,
-  'Under Review');
-
-check('awaiting editor decision',
-  classifyStatus({ subject: 'ESJ-D-25-00112', body: 'All reviews are complete and the manuscript is now with editor for a decision.' }).status,
-  'Awaiting Editor Decision');
-
-check('proofs',
-  classifyStatus({ subject: 'Proofs ready for JOSR-D-25-00417', body: 'Your page proofs are ready. Please correct your proof within 48 hours.' }).status,
-  'In Production (Proofs)');
-
-check('published',
-  classifyStatus({ subject: 'Your article is now published', body: 'Your article is now available online as the version of record.' }).status,
-  'Published');
-
-check('revision submitted receipt is not a revision request',
-  classifyStatus({ subject: 'JOSR-D-25-00417R1', body: 'Thank you for submitting your revised manuscript. We have received your revised submission.' }).status,
-  'Revision Submitted');
-
-check('urgent action flagged',
-  classifyStatus({
-    subject: 'Action required: copyright form',
-    body: 'Please sign the copyright agreement form within 7 days. Your submission will be withdrawn unless completed.',
-  }).urgent,
-  true);
-
-// ===========================================================================
-section('MANUSCRIPT ID extraction');
-// ===========================================================================
-
-check('Editorial Manager format from subject',
-  extractManuscriptId('Decision on JOSR-D-25-00417', '')?.id, 'JOSR-D-25-00417');
-
-check('labelled manuscript number from body',
-  extractManuscriptId('A decision has been reached', 'Manuscript Number: ESJ-D-24-01123')?.id, 'ESJ-D-24-01123');
-
-check('ScholarOne format',
-  extractManuscriptId('SPINE-25-0442 decision', '')?.id, 'SPINE-25-0442');
-
-check('revision suffix R1 normalises to base ID',
-  extractManuscriptId('Decision on JOSR-D-25-00417R1', '')?.id, 'JOSR-D-25-00417');
-
-check('dotted revision suffix normalises too',
-  normaliseId('SPINE-D-25-00112.R2'), 'SPINE-D-25-00112');
-
-check('subject beats body (avoids cross-contamination)',
-  extractManuscriptId('Decision on JOSR-D-25-00417', 'Regarding your other paper ESJ-D-24-01123 ...')?.id,
-  'JOSR-D-25-00417');
-
-check('no ID returns null',
-  extractManuscriptId('Newsletter', 'Read our latest issue'), null);
-
-// ===========================================================================
-section('RELEVANCE filter');
-// ===========================================================================
-
-check('call for papers rejected',
-  isRelevant({ from: 'noreply@elsevier.com', subject: 'Call for Papers: Special Issue', body: 'Submit your work. Unsubscribe here.' }).relevant,
-  false);
-
-check('table of contents alert rejected',
-  isRelevant({ from: 'alerts@springer.com', subject: 'Table of Contents Alert', body: 'New issue available. Unsubscribe.' }).relevant,
-  false);
-
-check('real decision email accepted',
-  isRelevant({ from: 'em@editorialmanager.com', subject: 'Decision on JOSR-D-25-00417', body: 'Your manuscript has been accepted.' }).relevant,
-  true);
-
-check('newsletter WITH a manuscript number still processed',
-  isRelevant({ from: 'x@journal.com', subject: 'Decision', body: 'Manuscript Number: JOSR-D-25-00417. Accepted. Unsubscribe here.' }).relevant,
-  true);
-
-// ===========================================================================
-section('JOURNAL extraction');
-// ===========================================================================
-
-check('known journal wins',
-  extractJournal({ subject: 'Decision', body: 'from the European Spine Journal editorial office' }, ['European Spine Journal']),
-  'European Spine Journal');
-
-check('journal-of pattern',
-  extractJournal({ subject: 'Decision', body: 'published in the Journal of Orthopaedic Surgery' }, []),
-  'Journal of Orthopaedic Surgery');
-
-// ===========================================================================
-// Report
-// ===========================================================================
-
-console.log(`\n${'═'.repeat(70)}`);
-console.log(`  ${passed} passed, ${failed} failed`);
-console.log('═'.repeat(70));
-
-if (failed) {
-  console.log('\n  Failing cases:');
-  for (const f of failures) console.log(`    · ${f.name}\n        want ${f.expected} / got ${f.actual}`);
-  console.log('\n  Do NOT run the sync live until these pass.\n');
+if (tally.fail) {
+  console.log(`\n${C.red}${C.bold}Regressions:${C.reset}`);
+  for (const f of failures) {
+    console.log(`  · ${f.tc.id} — ${f.tc.name}`);
+    for (const d of f.diffs) console.log(`      ${d.field}: want ${fmt(d.want)} / got ${fmt(d.got)}`);
+  }
+  console.log(`\n${C.red}Do NOT run the sync live until these pass.${C.reset}\n`);
   process.exit(1);
 }
-console.log('\n  Classifier behaving correctly on adversarial cases.\n');
+
+console.log(`\n${C.green}No regressions.${C.reset}` +
+            (tally.xfail ? ` ${C.dim}${tally.xfail} known bug(s) outstanding.${C.reset}\n` : '\n'));

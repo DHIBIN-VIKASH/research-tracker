@@ -156,6 +156,7 @@ async function main() {
   const stats = {
     fetched: 0, relevant: 0, alreadyProcessed: 0, ignored: 0,
     updated: 0, unchanged: 0, unmatched: 0, ambiguous: 0, regressions: 0,
+    noStatusSignal: 0, salvaged: 0,
     deadlinesFound: 0, errors: 0,
   };
   const changeLog = [];
@@ -260,6 +261,26 @@ async function processMessage({ db, msg, account, accountEmail, byMsId, knownJou
   // 2 ── Relevance. Drop newsletters and calls-for-papers before classifying.
   const rel = isRelevant(msg);
   if (!rel.relevant) {
+    // Safety net. The relevance filter runs BEFORE we know which paper an email
+    // concerns, so a false negative there is invisible and permanent. If the
+    // message names a manuscript ID we are already tracking, the filter was
+    // wrong by definition — queue it rather than trust the filter.
+    const salvageId = extractManuscriptId(msg.subject, msg.body);
+    const salvaged = salvageId && byMsId.get(salvageId.id);
+    if (salvaged) {
+      console.log(`  ! relevance filter overridden (${rel.reason}): ${truncate(msg.subject, 45)}`);
+      await queueUnmatched(
+        db,
+        {
+          msg, account, accountEmail, verdict: null, journal: null,
+          reason: 'filtered-but-known-paper', manuscriptId: salvageId.id, paperId: salvaged.firestoreId,
+          note: `Dropped as "${rel.reason}" but names ${salvageId.id}, which belongs to "${truncate(salvaged.title, 60)}". Review the relevance filter if this keeps happening.`,
+        },
+        stats
+      );
+      await markProcessed(db, processedRef, { outcome: 'filtered-but-known-paper', reason: rel.reason, msg, paperId: salvaged.firestoreId });
+      return;
+    }
     await markProcessed(db, processedRef, { outcome: 'irrelevant', reason: rel.reason, msg });
     return;
   }
@@ -299,10 +320,26 @@ async function processMessage({ db, msg, account, accountEmail, byMsId, knownJou
     return;
   }
 
-  // 5 ── No readable status: the email is about a known paper but says nothing
-  //      actionable (e.g. an ORCID reminder). Log it, change nothing.
+  // 5 ── No readable status. This used to log to the console and return —
+  //      which meant the email vanished. It was not applied, and it was not
+  //      queued either, so nothing on the dashboard ever showed it existed.
+  //      That is the single worst outcome available: a real editorial email
+  //      about a real paper, silently discarded.
+  //
+  //      Now it goes to the review queue. Most will be genuinely inert (ORCID
+  //      reminders, mailing-list confirmations) and you dismiss them in one
+  //      click. The ones that are not inert are the ones you would otherwise
+  //      have lost, and those are worth the noise.
   if (!verdict.status) {
-    console.log(`  · no status signal: ${truncate(msg.subject, 55)}`);
+    await queueUnmatched(
+      db,
+      {
+        msg, account, accountEmail, verdict, journal,
+        reason: 'no-status-signal', manuscriptId: idHit.id, paperId: paper.firestoreId,
+        note: `Matched "${truncate(paper.title, 70)}" but no rule recognised a status. Classify it by hand, or dismiss if it is routine.`,
+      },
+      stats
+    );
     await markProcessed(db, processedRef, { outcome: 'no-status-signal', msg, paperId: paper.firestoreId });
     return;
   }
@@ -322,8 +359,23 @@ async function processMessage({ db, msg, account, accountEmail, byMsId, knownJou
   }
 
   // 7 ── Already in this state. Common and healthy — journals resend reminders.
+  //
+  //      But an urgent demand must still raise the flag. Previously this
+  //      returned before `needsAttention` was ever written, so a chase email
+  //      arriving while the status was unchanged ("Action Required" twice in a
+  //      row, or a copyright reminder during "Under Review") set nothing at all.
   if (normalise(paper.status) === normalise(verdict.status)) {
     stats.unchanged++;
+    if (verdict.urgent && !DRY_RUN) {
+      await db.collection('papers').doc(paper.firestoreId).update({
+        needsAttention: true,
+        attentionReasons: verdict.urgentReasons || [],
+        lastEmailAt: Timestamp.fromDate(msg.receivedAt),
+        lastEmailSubject: truncate(msg.subject, 250),
+        lastEmailLink: gmailLink(msg.id, accountEmail, { inInbox: (msg.labelIds || []).includes('INBOX'), slot: account.slot }),
+      });
+      console.log(`  ⚠ urgent (status unchanged): ${truncate(msg.subject, 45)}`);
+    }
     await markProcessed(db, processedRef, { outcome: 'no-change', msg, paperId: paper.firestoreId });
     return;
   }
@@ -382,6 +434,10 @@ async function processMessage({ db, msg, account, accountEmail, byMsId, knownJou
     confidence: +verdict.confidence.toFixed(3),
     rule: verdict.rule,
     evidence: truncate(verdict.evidence || '', 400),
+    urgent: !!verdict.urgent,
+    urgentReasons: (verdict.urgentReasons || []).map((r) => ({
+      status: r.status, evidence: truncate(r.evidence || '', 200),
+    })),
     source: {
       account: account.label,
       accountEmail,
@@ -417,6 +473,9 @@ async function processMessage({ db, msg, account, accountEmail, byMsId, knownJou
       lastEmailLink: historyEntry.source.link,
       autoUpdated: true,
       needsAttention: !!verdict.urgent,
+      // The demand itself ("copyright form … within 7 days"), not the status.
+      // A notification that says "Under Review" tells you nothing actionable.
+      attentionReasons: verdict.urgentReasons || [],
     };
     // Journal handling.
     //   · No journal recorded yet          → fill it in.
@@ -518,8 +577,12 @@ async function queueUnmatched(db, payload, stats) {
   const { msg, account, accountEmail, verdict, journal, reason, manuscriptId, paperId, note } = payload;
   stats.unmatched++;
 
+  if (reason === 'no-status-signal') stats.noStatusSignal++;
+  if (reason === 'filtered-but-known-paper') stats.salvaged++;
+
   const label = { 'no-manuscript-id': 'no ID', 'unknown-manuscript-id': `unknown ID ${manuscriptId}`,
-    'ambiguous-classification': 'ambiguous', 'blocked-regression': 'regression' }[reason] || reason;
+    'ambiguous-classification': 'ambiguous', 'blocked-regression': 'regression',
+    'no-status-signal': 'no status', 'filtered-but-known-paper': 'filtered but known' }[reason] || reason;
   console.log(`  ? queued (${label}): ${truncate(msg.subject, 48)}`);
 
   if (DRY_RUN) return;
@@ -599,7 +662,9 @@ function summary(stats, changeLog, startedAt, finishedAt) {
   console.log(`  deadlines captured : ${stats.deadlinesFound}`);
   console.log(`  queued for review  : ${stats.unmatched}`);
   console.log(`    ├ ambiguous      : ${stats.ambiguous}`);
-  console.log(`    └ regressions    : ${stats.regressions}`);
+  console.log(`    ├ regressions    : ${stats.regressions}`);
+  console.log(`    ├ no status read : ${stats.noStatusSignal}`);
+  console.log(`    └ filter salvage : ${stats.salvaged}`);
   console.log(`  errors             : ${stats.errors}`);
   console.log(`  duration           : ${((finishedAt - startedAt) / 1000).toFixed(1)}s`);
 
