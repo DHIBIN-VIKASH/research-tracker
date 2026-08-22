@@ -1,0 +1,131 @@
+name: Sync Research Tracker
+
+# ============================================================================
+# Daily journal-email sync.
+#
+# WHY THIS RUNS HERE AND NOT IN A CHAT ASSISTANT
+# ----------------------------------------------
+# Assistant sandboxes run on a locked-down network that cannot reach
+# firestore.googleapis.com. GitHub Actions runners have full egress, native
+# secret storage, and — the part that matters most for an autonomous job — a
+# permanent, timestamped log of every run. When the tracker shows something
+# surprising, the Actions tab tells you exactly which email caused it.
+# ============================================================================
+
+on:
+  schedule:
+    # 02:30 UTC = 08:00 IST. Cron in GitHub Actions is ALWAYS UTC.
+    # Chosen so the run lands before your 07:15 postings end, and after most
+    # overnight editorial mail from US/EU offices has arrived.
+    - cron: '30 2 * * *'
+
+  # Manual trigger — use this for the first runs and whenever you want an
+  # immediate refresh instead of waiting for tomorrow.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (classify and report, write nothing)'
+        type: boolean
+        default: false
+      lookback:
+        description: 'How far back to scan (e.g. 3d, 14d, 60d)'
+        type: string
+        default: '3d'
+
+# Least privilege: the job reads nothing from the repo beyond its own code and
+# writes nothing back to it. All writes go to Firestore.
+permissions:
+  contents: read
+
+concurrency:
+  # Two overlapping runs would race on the same documents. Queue instead.
+  group: research-tracker-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        # `npm ci` needs a lockfile; fall back to install so a fresh clone of
+        # this workflow works before you have committed one.
+        run: npm ci --omit=dev || npm install --omit=dev
+
+      - name: Verify secrets are present
+        # Fail loudly and specifically. A missing secret otherwise surfaces as
+        # a confusing auth error 40 lines into the sync log.
+        env:
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN_A: ${{ secrets.GMAIL_REFRESH_TOKEN_A }}
+          GMAIL_REFRESH_TOKEN_B: ${{ secrets.GMAIL_REFRESH_TOKEN_B }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          missing=""
+          [ -z "$GMAIL_CLIENT_ID" ]          && missing="$missing GMAIL_CLIENT_ID"
+          [ -z "$GMAIL_CLIENT_SECRET" ]      && missing="$missing GMAIL_CLIENT_SECRET"
+          [ -z "$FIREBASE_SERVICE_ACCOUNT" ] && missing="$missing FIREBASE_SERVICE_ACCOUNT"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required secrets:$missing"
+            echo "Add them at: Settings -> Secrets and variables -> Actions"
+            exit 1
+          fi
+          if [ -z "$GMAIL_REFRESH_TOKEN_A" ] && [ -z "$GMAIL_REFRESH_TOKEN_B" ]; then
+            echo "::error::No Gmail refresh tokens set. Need at least one of GMAIL_REFRESH_TOKEN_A / _B"
+            exit 1
+          fi
+          [ -z "$GMAIL_REFRESH_TOKEN_A" ] && echo "::warning::GMAIL_REFRESH_TOKEN_A missing — Dhibin's inbox will be skipped"
+          [ -z "$GMAIL_REFRESH_TOKEN_B" ] && echo "::warning::GMAIL_REFRESH_TOKEN_B missing — Professor's inbox will be skipped"
+          echo "Secret check passed."
+
+      - name: Run sync
+        env:
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN_A: ${{ secrets.GMAIL_REFRESH_TOKEN_A }}
+          GMAIL_REFRESH_TOKEN_B: ${{ secrets.GMAIL_REFRESH_TOKEN_B }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          SYNC_LOOKBACK: ${{ inputs.lookback || '3d' }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            node scripts/sync-journal-emails.mjs --dry-run
+          else
+            node scripts/sync-journal-emails.mjs
+          fi
+
+      - name: Send deadline alerts
+        # Runs after the sync so it sees deadlines captured minutes ago.
+        # `always()` is deliberate: even if the sync failed, previously stored
+        # deadlines still need their warnings. A broken sync must not also
+        # silence your revision reminders.
+        if: always() && inputs.dry_run != true
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          ALERT_SMTP_USER: ${{ secrets.ALERT_SMTP_USER }}
+          ALERT_SMTP_PASS: ${{ secrets.ALERT_SMTP_PASS }}
+          ALERT_RECIPIENTS: ${{ secrets.ALERT_RECIPIENTS }}
+        run: |
+          if [ -z "$ALERT_SMTP_USER" ] || [ -z "$ALERT_RECIPIENTS" ]; then
+            echo "::notice::Deadline alerts not configured (ALERT_SMTP_USER / ALERT_RECIPIENTS missing) — skipping."
+            exit 0
+          fi
+          node scripts/send-deadline-alerts.mjs
+
+      - name: Note failure
+        if: failure()
+        run: |
+          echo "::warning::Sync failed. Common causes, in order of likelihood:"
+          echo "  1. A Gmail refresh token was revoked  -> re-run scripts/get-refresh-token.mjs"
+          echo "  2. Firebase service account rotated   -> regenerate and update the secret"
+          echo "  3. Gmail API quota exceeded           -> usually resolves on the next run"
+          echo "GitHub also disables scheduled workflows after 60 days of repo inactivity."

@@ -1,0 +1,109 @@
+name: Backfill Manuscript IDs
+
+# ============================================================================
+# Discovers manuscript IDs in both inboxes and links them to tracked papers —
+# WITHOUT needing Node, npm or a terminal on your own computer.
+#
+# Everything runs on GitHub's servers. You trigger it from the Actions tab and
+# read the result in the run log.
+#
+# Two modes:
+#   report  (default) — scans the mail and prints every manuscript ID it found
+#                       next to your tracked papers. Writes NOTHING.
+#   write             — applies a mapping you paste in, linking paper → ID(s).
+#
+# This is a one-time setup task, plus an occasional re-run whenever a paper is
+# resubmitted to a new journal and you need to attach its new ID.
+# ============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'report = scan and list (safe) · write = apply the mapping below'
+        type: choice
+        options: [report, write]
+        default: report
+      months:
+        description: 'How many months of mail to scan (report mode)'
+        type: string
+        default: '12'
+      mapping:
+        description: >-
+          write mode only. JSON linking paper id → manuscript id(s), e.g.
+          {"1":"ESJ-D-25-00112","3":["SPINE-D-25-00044","JOSR-D-25-00417"]}
+          Use an array when a paper moved journals — that keeps ONE timeline.
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-tracker-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci --omit=dev || npm install --omit=dev
+
+      - name: Verify secrets
+        env:
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          missing=""
+          [ -z "$GMAIL_CLIENT_ID" ]          && missing="$missing GMAIL_CLIENT_ID"
+          [ -z "$GMAIL_CLIENT_SECRET" ]      && missing="$missing GMAIL_CLIENT_SECRET"
+          [ -z "$FIREBASE_SERVICE_ACCOUNT" ] && missing="$missing FIREBASE_SERVICE_ACCOUNT"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required secrets:$missing"
+            exit 1
+          fi
+
+      - name: Write mapping file
+        if: inputs.mode == 'write'
+        env:
+          MAPPING: ${{ inputs.mapping }}
+        run: |
+          if [ -z "$MAPPING" ]; then
+            echo "::error::mode=write but no mapping was provided."
+            exit 1
+          fi
+          printf '%s' "$MAPPING" > mapping.json
+          # Fail loudly on malformed JSON rather than halfway through writing.
+          node -e "JSON.parse(require('fs').readFileSync('mapping.json','utf8')); console.log('mapping.json is valid JSON')"
+
+      - name: Run backfill
+        env:
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN_A: ${{ secrets.GMAIL_REFRESH_TOKEN_A }}
+          GMAIL_REFRESH_TOKEN_B: ${{ secrets.GMAIL_REFRESH_TOKEN_B }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          if [ "${{ inputs.mode }}" = "write" ]; then
+            node scripts/backfill-manuscript-ids.mjs --write mapping.json
+          else
+            node scripts/backfill-manuscript-ids.mjs --months "${{ inputs.months }}"
+          fi
+
+      - name: Remove mapping file
+        if: always()
+        # Belt and braces: the runner is destroyed anyway, but never leave a
+        # file containing project data lying around mid-job.
+        run: rm -f mapping.json

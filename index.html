@@ -5,10 +5,20 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="robots" content="noindex, nofollow" />
+  <meta name="theme-color" content="#f6f7f9" />
+  <meta name="description" content="Research manuscript tracker" />
   <title>Research Portfolio</title>
+  <!-- Paint the page background before the CSS bundle loads, so there is no
+       dark flash on first render. The value must match --page in index.css.
+       NOTE: the previous inline style="background:#020617" on <body> silently
+       overrode the stylesheet — inline styles beat any external rule, so the
+       page stayed dark no matter what the theme said. Set the colour here. -->
+  <style>
+    html, body { background: #f6f7f9; margin: 0; }
+  </style>
 </head>
 
-<body style="background: #020617; margin: 0;">
+<body>
   <div id="root"></div>
   <script type="module" src="./src/main.jsx"></script>
 </body>

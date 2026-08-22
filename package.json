@@ -10,24 +10,35 @@
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
     "predeploy": "npm run build",
-    "deploy": "gh-pages -d dist"
+    "deploy": "gh-pages -d dist",
+    "sync": "node scripts/sync-journal-emails.mjs",
+    "sync:dry": "node scripts/sync-journal-emails.mjs --dry-run",
+    "backfill": "node scripts/backfill-manuscript-ids.mjs",
+    "alerts": "node scripts/send-deadline-alerts.mjs",
+    "alerts:dry": "node scripts/send-deadline-alerts.mjs --dry-run",
+    "auth": "node scripts/get-refresh-token.mjs",
+    "test:classify": "node scripts/test-classifier.mjs"
   },
   "dependencies": {
-    "firebase": "^12.10.0",
+    "firebase": "^12.17.1",
+    "firebase-admin": "^13.0.2",
     "framer-motion": "^11.18.2",
+    "googleapis": "^144.0.0",
     "lucide-react": "^0.344.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "nodemailer": "^6.9.16",
+    "playwright": "^1.62.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
-    "@vitejs/plugin-react": "^4.2.1",
+    "@vitejs/plugin-react": "^4.7.0",
     "eslint": "^8.57.0",
     "eslint-plugin-react": "^7.34.1",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.6",
     "gh-pages": "^6.1.1",
-    "vite": "^5.2.0"
+    "vite": "^5.4.21"
   }
 }

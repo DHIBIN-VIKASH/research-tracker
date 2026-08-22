@@ -1,0 +1,184 @@
+rules_version = '2';
+
+// ============================================================================
+// Research Tracker — Firestore Security Rules
+// ============================================================================
+//
+// WHY THIS FILE EXISTS
+// --------------------
+// Your Firebase config (apiKey, projectId, etc.) is committed in
+// src/firebase.js and published to a public GitHub repo. That is NORMAL and
+// expected for Firebase web apps — the API key is an identifier, not a secret.
+//
+// What is NOT normal is relying on the app's password screen for protection.
+// The gate in App.jsx checks a passcode in the browser and stores
+// `auth_access` in localStorage. That is a *cosmetic* lock: it hides the UI,
+// it does not protect the database. Anyone who reads your public repo can
+// take the config, point the Firebase SDK at your project, and read or
+// OVERWRITE every paper record — without ever loading your website.
+//
+// These rules move enforcement to the server, where it actually holds.
+//
+// THE MODEL
+// ---------
+//   READ   -> open to anyone. The dashboard is a public web page with no
+//             login, so the browser must be able to read. If you would not
+//             want a title/status published, do not put it in Firestore.
+//             (See "IF YOUR DATA IS CONFIDENTIAL" below to lock reads too.)
+//
+//   WRITE  -> service account ONLY. The GitHub Actions sync job authenticates
+//             with the Firebase Admin SDK, which bypasses these rules entirely
+//             by design. Browsers get no write access at all, which means the
+//             attack above (public config -> overwrite your papers) is closed.
+//
+// TRADE-OFF YOU ARE ACCEPTING — READ THIS
+// ----------------------------------------
+// Locking writes means the "New Publication" / edit / delete buttons in the
+// dashboard WILL STOP WORKING. That is deliberate: an unauthenticated write
+// path is exactly the hole being closed. You have three ways forward:
+//
+//   Option A (fastest, recommended to start): edit papers in the Firebase
+//     console at console.firebase.google.com. The daily sync handles status
+//     changes automatically; you only touch the console to ADD a new paper
+//     or set its manuscriptId. That is a few times a month, not daily.
+//
+//   Option B (best long-term): turn on Firebase Authentication, add yourself
+//     and your professor as users, and switch the write rules below to the
+//     commented-out `isEditor()` version. The dashboard buttons work again,
+//     but only for the two of you, enforced server-side.
+//
+//   Option C: keep writes open (do NOT do this). Your data stays editable by
+//     anyone on the internet who finds the repo.
+//
+// DEPLOY WITH
+//   firebase deploy --only firestore:rules
+// or paste into console.firebase.google.com -> Firestore Database -> Rules.
+// ============================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------------------------------------------------------------------
+    // Helper: is this request from a signed-in editor?
+    //
+    // Only used if you adopt Option B above. Add each editor's Firebase Auth
+    // UID to the list. Find UIDs in Firebase console -> Authentication -> Users.
+    // ---------------------------------------------------------------------
+    function isEditor() {
+      return request.auth != null
+        && request.auth.uid in [
+             // 'PASTE_DHIBIN_FIREBASE_UID_HERE',
+             // 'PASTE_PROFESSOR_FIREBASE_UID_HERE'
+           ];
+    }
+
+    // ---------------------------------------------------------------------
+    // Helper: does an incoming paper doc have a sane shape?
+    //
+    // Defence in depth. Even a correctly-authenticated but buggy client
+    // should not be able to write a paper with no title or a 50KB status
+    // string. Only enforced on client writes — the Admin SDK bypasses rules.
+    // ---------------------------------------------------------------------
+    function isValidPaper() {
+      let d = request.resource.data;
+      return d.title is string
+        && d.title.size() > 0
+        && d.title.size() < 1000
+        && d.status is string
+        && d.status.size() < 200;
+    }
+
+    // ---------------------------------------------------------------------
+    // papers — your manuscripts under submission
+    // ---------------------------------------------------------------------
+    match /papers/{paperId} {
+      allow read: if true;
+
+      // Writes blocked for all browser clients. The GitHub Actions sync uses
+      // the Admin SDK and is unaffected by this line.
+      allow write: if false;
+
+      // --- Option B: swap the line above for these three when you enable
+      // --- Firebase Auth and fill in the UIDs in isEditor().
+      // allow create: if isEditor() && isValidPaper();
+      // allow update: if isEditor() && isValidPaper();
+      // allow delete: if isEditor();
+    }
+
+    // ---------------------------------------------------------------------
+    // projects — non-manuscript work items
+    // ---------------------------------------------------------------------
+    match /projects/{projectId} {
+      allow read: if true;
+      allow write: if false;
+
+      // --- Option B:
+      // allow create: if isEditor() && isValidPaper();
+      // allow update: if isEditor() && isValidPaper();
+      // allow delete: if isEditor();
+    }
+
+    // ---------------------------------------------------------------------
+    // unmatched — journal emails the sync could not confidently attach
+    //             to a known paper.
+    //
+    // This is the safety valve that makes full autonomy survivable. When the
+    // script is unsure, the email lands HERE instead of being guessed onto
+    // the wrong manuscript. The dashboard shows these for you to resolve.
+    //
+    // Written only by the sync (Admin SDK). Readable so the dashboard can
+    // display the queue.
+    // ---------------------------------------------------------------------
+    match /unmatched/{itemId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // ---------------------------------------------------------------------
+    // syncRuns — one record per daily run: counts, errors, timing.
+    //
+    // Your second audit trail (the first is the GitHub Actions log). Lets the
+    // dashboard show "last synced 6 hours ago" so a silently dead cron job is
+    // visible instead of leaving you to believe stale data is current.
+    // ---------------------------------------------------------------------
+    match /syncRuns/{runId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // ---------------------------------------------------------------------
+    // processedEmails — Gmail message IDs already handled, for idempotency.
+    //
+    // Internal bookkeeping so a re-run does not double-apply a status change.
+    // Nothing in the UI needs it, so it is fully private.
+    // ---------------------------------------------------------------------
+    match /processedEmails/{messageId} {
+      allow read, write: if false;
+    }
+
+    // ---------------------------------------------------------------------
+    // Default deny for anything not matched above.
+    //
+    // Without this, a future collection you add is governed by no rule and
+    // Firestore denies it anyway — but being explicit prevents a careless
+    // `allow read, write: if true` from ever being pasted in as a "quick fix".
+    // ---------------------------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+
+// ============================================================================
+// IF YOUR DATA IS CONFIDENTIAL
+// ----------------------------
+// Unpublished manuscript titles under review can be sensitive — they reveal
+// what you are working on before it is public. `allow read: if true` means
+// anyone with your project ID can read every title and status.
+//
+// If that matters, enable Firebase Auth (Option B), then change every
+// `allow read: if true` above to `allow read: if request.auth != null;`.
+// The dashboard will then require a real login instead of the localStorage
+// passcode. Say the word and I will wire the Firebase Auth login screen into
+// App.jsx for you.
+// ============================================================================
