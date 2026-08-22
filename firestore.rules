@@ -125,13 +125,23 @@ service cloud.firestore {
     // script is unsure, the email lands HERE instead of being guessed onto
     // the wrong manuscript. The dashboard shows these for you to resolve.
     //
-    // Written by the sync (Admin SDK) and, once the dashboard grows a
-    // "resolve" action (Phase 2), by signed-in editors marking an item
-    // resolved. For now, still Admin-SDK-only.
+    // Created and read only by the sync's Admin SDK path (which bypasses
+    // these rules), never by a browser client. Signed-in editors may only
+    // UPDATE an existing item to mark it resolved — via the dashboard's
+    // "Dismiss" action, or after "Classify manually" — and only the
+    // resolution bookkeeping fields, never the email content the sync wrote.
     // ---------------------------------------------------------------------
+    function isValidUnmatchedResolution() {
+      let before = resource.data;
+      let after = request.resource.data;
+      return after.diff(before).affectedKeys().hasOnly(['resolved', 'resolvedAt', 'resolvedBy', 'resolution'])
+        && after.resolved is bool;
+    }
     match /unmatched/{itemId} {
       allow read: if true;
-      allow write: if false;
+      allow create: if false;
+      allow update: if isEditor() && isValidUnmatchedResolution();
+      allow delete: if false;
     }
 
     // ---------------------------------------------------------------------

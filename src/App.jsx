@@ -272,6 +272,17 @@ export default function App() {
         enriched.filter((p) => p._deadline && !isDead(p.status) && !isPublished(p.status))
             .sort((a, b) => a._days - b._days), [enriched]);
 
+    // Papers the classifier found an explicit demand in — not just a status
+    // word, but language like "action required" or a chase for a missing
+    // form. Distinct from actionable/deadline urgency: a paper can be
+    // mid-review with no deadline and still have an unresolved demand sitting
+    // in its inbox.
+    const attention = useMemo(() =>
+        enriched.filter((p) => (p.attentionReasons || []).length > 0 && !isDead(p.status) && !isPublished(p.status))
+            .sort((a, b) => (b._lastEmail || 0) - (a._lastEmail || 0)), [enriched]);
+
+    const papersById = useMemo(() => new Map(enriched.map((p) => [p.firestoreId, p])), [enriched]);
+
     const stats = useMemo(() => {
         const live = enriched.filter((p) => !isDead(p.status) && !isPublished(p.status));
         return {
@@ -337,6 +348,13 @@ export default function App() {
             setIsAddingMode(false);
         } catch (e) { setError(`Add failed: ${e.message}`); }
     };
+    const handleDismissUnmatched = async (firestoreId) => {
+        try {
+            await updateDoc(doc(db, 'unmatched', firestoreId), {
+                resolved: true, resolvedAt: new Date(), resolvedBy: user?.email || null, resolution: 'dismissed',
+            });
+        } catch (e) { setError(`Dismiss failed: ${e.message}`); }
+    };
 
     if (!isAuthenticated) {
         return (
@@ -379,8 +397,14 @@ export default function App() {
             )}
 
             <StatRow stats={stats} />
+            {attention.length > 0 && <AttentionPanel items={attention} onOpen={setTimelineFor} />}
             {actionable.length > 0 && <DeadlinePanel items={actionable} onOpen={setTimelineFor} />}
-            {unmatched.length > 0 && <UnmatchedPanel items={unmatched} />}
+            {unmatched.length > 0 && (
+                <UnmatchedPanel items={unmatched} papersById={papersById} canEdit={canEdit}
+                    onLinkToPaper={setTimelineFor}
+                    onClassifyManually={(p) => { setModalTarget('papers'); setEditingItem(p); }}
+                    onDismiss={(u) => handleDismissUnmatched(u.firestoreId)} />
+            )}
             <PipelineBar data={pipeline} total={enriched.length} resubmitted={stats.resubmitted} />
 
             <Toolbar searchTerm={searchTerm} setSearchTerm={setSearchTerm}
@@ -516,6 +540,56 @@ function StatRow({ stats }) {
     );
 }
 
+// Driven by paper.attentionReasons[] ({status, evidence}), written by the sync
+// whenever the classifier finds an explicit demand — "action required",
+// a copyright-form chase, a threatened unsubmission — as opposed to just a
+// status word. This is a different signal from DeadlinePanel below: a paper
+// can carry an unresolved demand with no extractable date at all.
+function AttentionPanel({ items, onOpen }) {
+    const u = URGENCY.urgent;
+    return (
+        <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="glass-card"
+            style={{ padding: 'clamp(1.15rem,2.5vw,1.6rem)', marginBottom: '1.4rem', borderColor: u.fg + '55' }}>
+            <h2 style={{ fontSize: '.9rem', color: u.fg, display: 'flex', alignItems: 'center', gap: '.55rem', textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '.5rem' }}>
+                <Zap size={18} /> Needs attention
+                <span style={{ fontSize: '.72rem', color: 'var(--text-muted)', letterSpacing: 0, textTransform: 'none', fontWeight: 500 }}>
+                    — {items.length} paper{items.length > 1 ? 's' : ''} with an unresolved demand
+                </span>
+            </h2>
+            <p style={{ fontSize: '.75rem', color: 'var(--text-muted)', marginBottom: '.9rem', lineHeight: 1.6, maxWidth: 720 }}>
+                Raised by the classifier finding language like "action required" or a chase for a missing form in an
+                email — not inferred from the status word alone. Clears once the underlying email is handled.
+            </p>
+            <div style={{ display: 'grid', gap: '.6rem' }}>
+                {items.map((p) => (
+                    <button key={p.firestoreId} onClick={() => onOpen(p)}
+                        style={{ display: 'block', textAlign: 'left', padding: '.8rem .95rem', borderRadius: 'var(--radius-sm)', background: 'var(--surface-sunken)', border: '1px solid var(--border)', borderLeft: `3px solid ${u.fg}`, cursor: 'pointer', width: '100%', fontFamily: 'inherit' }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '.6rem', alignItems: 'center', marginBottom: '.4rem' }}>
+                            <span style={{ flex: 1, minWidth: 200, fontSize: '.86rem', color: 'var(--text-primary)', fontWeight: 500 }}>{p.title}</span>
+                            <span style={{ fontSize: '.72rem', color: 'var(--text-muted)' }}>{p.journal || '—'}</span>
+                            <StatusBadge status={p.status} small />
+                        </div>
+                        <div style={{ display: 'grid', gap: '.3rem' }}>
+                            {p.attentionReasons.slice(0, 3).map((r, i) => (
+                                <div key={i} style={{ fontSize: '.71rem', color: u.fg, display: 'flex', gap: '.4rem', alignItems: 'flex-start' }}>
+                                    <AlertTriangle size={11} style={{ flexShrink: 0, marginTop: 2 }} />
+                                    <span>
+                                        <strong>{r.status}</strong>
+                                        {r.evidence && <span style={{ color: 'var(--text-secondary)', fontStyle: 'italic' }}> — "{r.evidence}"</span>}
+                                    </span>
+                                </div>
+                            ))}
+                            {p.attentionReasons.length > 3 && (
+                                <span style={{ fontSize: '.68rem', color: 'var(--text-faint)' }}>+{p.attentionReasons.length - 3} more</span>
+                            )}
+                        </div>
+                    </button>
+                ))}
+            </div>
+        </motion.section>
+    );
+}
+
 function DeadlinePanel({ items, onOpen }) {
     return (
         <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="glass-card"
@@ -551,7 +625,7 @@ function DeadlinePanel({ items, onOpen }) {
     );
 }
 
-function UnmatchedPanel({ items }) {
+function UnmatchedPanel({ items, papersById, canEdit, onLinkToPaper, onClassifyManually, onDismiss }) {
     const [open, setOpen] = useState(false);
     const shown = open ? items : items.slice(0, 3);
     const REASON = {
@@ -559,6 +633,8 @@ function UnmatchedPanel({ items }) {
         'unknown-manuscript-id': 'Manuscript ID not linked to any tracked paper',
         'ambiguous-classification': 'Could not tell which decision this is',
         'blocked-regression': 'Would have moved a paper backwards',
+        'no-status-signal': 'Matched a paper but no rule recognised a status',
+        'filtered-but-known-paper': 'Dropped by the relevance filter but names a tracked paper',
     };
     return (
         <motion.section initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-card"
@@ -572,21 +648,41 @@ function UnmatchedPanel({ items }) {
                 usually means a resubmission — add it to the right paper and its history continues in the same timeline.
             </p>
             <div style={{ display: 'grid', gap: '.55rem' }}>
-                {shown.map((u) => (
-                    <div key={u.firestoreId} style={{ padding: '.8rem .95rem', borderRadius: 'var(--radius-sm)', background: 'var(--surface-sunken)', border: '1px solid var(--border)', borderLeft: `3px solid ${TONE.pending.fg}` }}>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '.55rem', alignItems: 'center', marginBottom: '.35rem' }}>
-                            <span style={{ fontSize: '.65rem', fontWeight: 800, color: TONE.pending.fg, textTransform: 'uppercase', letterSpacing: '.06em' }}>{REASON[u.reason] || u.reason}</span>
-                            {u.manuscriptId && <code style={{ fontSize: '.69rem', color: 'var(--accent)', background: 'var(--accent-soft)', padding: '.12rem .4rem', borderRadius: 4 }}>{u.manuscriptId}</code>}
-                            {u.suggestedStatus && <span style={{ fontSize: '.68rem', color: 'var(--text-muted)' }}>looks like: {u.suggestedStatus}</span>}
+                {shown.map((u) => {
+                    const linkedPaper = u.relatedPaperId ? papersById.get(u.relatedPaperId) : null;
+                    return (
+                        <div key={u.firestoreId} style={{ padding: '.8rem .95rem', borderRadius: 'var(--radius-sm)', background: 'var(--surface-sunken)', border: '1px solid var(--border)', borderLeft: `3px solid ${TONE.pending.fg}` }}>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '.55rem', alignItems: 'center', marginBottom: '.35rem' }}>
+                                <span style={{ fontSize: '.65rem', fontWeight: 800, color: TONE.pending.fg, textTransform: 'uppercase', letterSpacing: '.06em' }}>{REASON[u.reason] || u.reason}</span>
+                                {u.manuscriptId && <code style={{ fontSize: '.69rem', color: 'var(--accent)', background: 'var(--accent-soft)', padding: '.12rem .4rem', borderRadius: 4 }}>{u.manuscriptId}</code>}
+                                {u.suggestedStatus && <span style={{ fontSize: '.68rem', color: 'var(--text-muted)' }}>looks like: {u.suggestedStatus}</span>}
+                            </div>
+                            <div style={{ fontSize: '.83rem', color: 'var(--text-primary)', marginBottom: '.25rem' }}>{u.subject}</div>
+                            {u.note && <div style={{ fontSize: '.71rem', color: TONE.pending.fg, marginBottom: '.25rem' }}>{u.note}</div>}
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '.85rem', fontSize: '.69rem', color: 'var(--text-faint)', alignItems: 'center' }}>
+                                <span>{u.account}</span><span>{relTime(toDate(u.receivedAt))}</span>
+                                {u.link && <a href={u.link} target="_blank" rel="noopener noreferrer" className="premium-link" style={{ fontSize: '.69rem' }}><Mail size={11} style={{ marginRight: 4 }} /> Open email</a>}
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '.5rem', marginTop: '.65rem' }}>
+                                {linkedPaper && (
+                                    <button onClick={() => onLinkToPaper(linkedPaper)} className="btn-ghost" style={{ fontSize: '.7rem', padding: '.35rem .6rem' }}>
+                                        <BookOpen size={12} style={{ marginRight: 4 }} /> View paper
+                                    </button>
+                                )}
+                                {canEdit && linkedPaper && (
+                                    <button onClick={() => onClassifyManually(linkedPaper)} className="btn-ghost" style={{ fontSize: '.7rem', padding: '.35rem .6rem' }}>
+                                        <Edit3 size={12} style={{ marginRight: 4 }} /> Classify manually
+                                    </button>
+                                )}
+                                {canEdit && (
+                                    <button onClick={() => onDismiss(u)} className="btn-ghost" style={{ fontSize: '.7rem', padding: '.35rem .6rem', color: TONE.dead.fg }}>
+                                        <XCircle size={12} style={{ marginRight: 4 }} /> Dismiss
+                                    </button>
+                                )}
+                            </div>
                         </div>
-                        <div style={{ fontSize: '.83rem', color: 'var(--text-primary)', marginBottom: '.25rem' }}>{u.subject}</div>
-                        {u.note && <div style={{ fontSize: '.71rem', color: TONE.pending.fg, marginBottom: '.25rem' }}>{u.note}</div>}
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '.85rem', fontSize: '.69rem', color: 'var(--text-faint)', alignItems: 'center' }}>
-                            <span>{u.account}</span><span>{relTime(toDate(u.receivedAt))}</span>
-                            {u.link && <a href={u.link} target="_blank" rel="noopener noreferrer" className="premium-link" style={{ fontSize: '.69rem' }}><Mail size={11} style={{ marginRight: 4 }} /> Open email</a>}
-                        </div>
-                    </div>
-                ))}
+                    );
+                })}
             </div>
             {items.length > 3 && (
                 <button onClick={() => setOpen(!open)} className="btn-ghost" style={{ marginTop: '.75rem', fontSize: '.75rem' }}>
@@ -826,6 +922,11 @@ function TimelineModal({ paper, onClose }) {
                                                         </span>
                                                         {h.previousStatus && <span style={{ fontSize: '.69rem', color: 'var(--text-faint)' }}>from {h.previousStatus}</span>}
                                                         {newest && <span style={{ fontSize: '.6rem', color: 'var(--accent)', background: 'var(--accent-soft)', padding: '.08rem .38rem', borderRadius: 4, fontWeight: 800 }}>CURRENT</span>}
+                                                        {h.urgent && (
+                                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '.25rem', fontSize: '.6rem', color: URGENCY.urgent.fg, background: URGENCY.urgent.bg, padding: '.08rem .38rem', borderRadius: 4, fontWeight: 800 }}>
+                                                                <AlertTriangle size={9} /> URGENT
+                                                            </span>
+                                                        )}
                                                     </div>
                                                     <div style={{ fontSize: '.71rem', color: 'var(--text-muted)', marginBottom: '.45rem', display: 'flex', flexWrap: 'wrap', gap: '.75rem' }}>
                                                         <span>{h._at ? h._at.toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
@@ -846,6 +947,22 @@ function TimelineModal({ paper, onClose }) {
                                                                     <Mail size={11} style={{ marginRight: 4 }} /> Open the source email
                                                                 </a>
                                                             )}
+                                                        </div>
+                                                    )}
+                                                    {/* Everything the classifier flagged as an explicit demand on this
+                                                        email — OR'd across all matching rules, not just the one that
+                                                        won the status. Can carry more than the status line implies. */}
+                                                    {h.urgentReasons?.length > 0 && (
+                                                        <div style={{ marginTop: '.5rem', display: 'grid', gap: '.3rem' }}>
+                                                            {h.urgentReasons.map((r, ri) => (
+                                                                <div key={ri} style={{ fontSize: '.69rem', color: URGENCY.urgent.fg, display: 'flex', gap: '.35rem', alignItems: 'flex-start' }}>
+                                                                    <AlertTriangle size={10} style={{ flexShrink: 0, marginTop: 2 }} />
+                                                                    <span>
+                                                                        <strong>{r.status}</strong>
+                                                                        {r.evidence && <> — <em style={{ color: 'var(--text-secondary)' }}>“{r.evidence}”</em></>}
+                                                                    </span>
+                                                                </div>
+                                                            ))}
                                                         </div>
                                                     )}
                                                 </div>

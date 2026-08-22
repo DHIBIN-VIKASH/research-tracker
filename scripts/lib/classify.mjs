@@ -302,6 +302,8 @@ const RULES = [
     priority: 83,
     weight: 0.9,
     urgent: true,
+    // Same reasoning as Withdrawn: "may be unsubmitted if…" is a threat.
+    globalVeto: true,
     patterns: [
       /\b(?:has\s+been\s+|was\s+)?unsubmitted\b/i,
       /\bunsubmit(?:ting)?\s+(?:your|the)\s+(?:manuscript|submission)/i,
@@ -322,6 +324,11 @@ const RULES = [
     status: 'Major Revision Requested',
     priority: 75,
     weight: 0.9,
+    urgent: true,
+    // URGENT. A revision request is one of the two alerts this whole system
+    // exists to deliver: the clock is running, the deadline is real, and a
+    // missed one kills the paper. Without this flag the status changed on the
+    // dashboard and nobody was told.
     patterns: [
       /\bmajor\s+revision/i,
       /\bdecision:\s*major/i,
@@ -336,6 +343,11 @@ const RULES = [
     status: 'Minor Revision Requested',
     priority: 74,
     weight: 0.9,
+    urgent: true,
+    // URGENT. A revision request is one of the two alerts this whole system
+    // exists to deliver: the clock is running, the deadline is real, and a
+    // missed one kills the paper. Without this flag the status changed on the
+    // dashboard and nobody was told.
     patterns: [/\bminor\s+revision/i, /\bdecision:\s*minor/i, /minor\s+(?:changes|corrections)\s+(?:are\s+)?(?:required|needed)/i],
     notIf: [/minor\s+revision\s+(?:was\s+)?(?:submitted|completed|received)/i],
   },
@@ -345,6 +357,11 @@ const RULES = [
     status: 'Revision Requested',
     priority: 70,
     weight: 0.82,
+    urgent: true,
+    // URGENT. A revision request is one of the two alerts this whole system
+    // exists to deliver: the clock is running, the deadline is real, and a
+    // missed one kills the paper. Without this flag the status changed on the
+    // dashboard and nobody was told.
     patterns: [
       /invite\s+you\s+to\s+submit\s+a\s+revis/i,
       /revise\s+(?:and\s+resubmit|your\s+manuscript)/i,
@@ -457,9 +474,54 @@ const RULES = [
       /please\s+(?:complete|provide|upload|sign)[^.]{0,60}(?:within|by)\s+\d+\s+(?:day|week)/i,
       /(?:copyright|licence|license)\s+(?:form|agreement)[^.]{0,40}(?:sign|complete|required)/i,
       /your\s+submission\s+(?:will\s+be\s+)?(?:withdrawn|removed)\s+(?:if|unless)/i,
+      // A threat to unsubmit/withdraw is not the EVENT (those rules veto it)
+      // but it is unambiguously a demand for action, and these are exactly the
+      // emails that quietly kill submissions when they sit unread.
+      /(?:will|may|might|could)\s+be\s+(?:unsubmitted|withdrawn|removed)/i,
       /reminder[^.]{0,60}(?:overdue|outstanding|awaiting\s+your)/i,
     ],
     notIf: [/no\s+action\s+(?:is\s+)?(?:required|needed)/i],
+  },
+
+  // ----- TRANSFER OFFERED -----------------------------------------------
+  // The paper is NOT dead: the publisher is offering to move it, usually with
+  // the reviewer reports, to a sister journal. These arrive wrapped in
+  // rejection language ("we are unable to publish… but"), so they must outrank
+  // both Rejected (80) and Desk Rejected (82) or the tracker buries a live
+  // manuscript. Urgent because the offer expires.
+  {
+    status: 'Transfer Offered',
+    priority: 86,
+    weight: 0.88,
+    urgent: true,
+    patterns: [
+      /transfer\s+(?:your|the|this)\s+(?:manuscript|submission|paper)/i,
+      /(?:offer|offering|invite|inviting|suggest|recommend)[^.]{0,80}transfer/i,
+      /opportunity\s+to\s+transfer/i,
+      /would\s+you\s+like[^.]{0,60}transfer/i,
+      /(?:article\s+)?transfer\s+(?:service|desk|offer|option)/i,
+      /portable\s+peer\s+review/i,
+    ],
+    notIf: [
+      /has\s+been\s+transferred/i,
+      /transfer\s+(?:is\s+)?(?:now\s+)?complete/i,
+    ],
+  },
+
+  // ----- TRANSFERRED -----------------------------------------------------
+  // The move already happened. The caller promotes the new manuscript ID and
+  // records the journal change, so the timeline stays ONE continuous story
+  // instead of restarting at the new venue.
+  {
+    status: 'Transferred',
+    priority: 87,
+    weight: 0.9,
+    patterns: [
+      /(?:manuscript|submission|paper)[^.]{0,60}(?:has\s+been\s+|was\s+)transferred\s+to/i,
+      /transfer\s+(?:to\s+[^.]{0,50})?(?:is\s+)?(?:now\s+)?complete/i,
+      /now\s+under\s+consideration\s+(?:at|by)/i,
+    ],
+    notIf: [/if\s+you\s+(?:wish|would\s+like)\s+to\s+transfer/i],
   },
 
   // ----- WITHDRAWN -------------------------------------------------------
@@ -468,6 +530,9 @@ const RULES = [
     priority: 88,
     terminal: true,
     weight: 0.85,
+    // Document-wide by nature: a threat to withdraw anywhere in the email means
+    // no withdrawal has actually happened.
+    globalVeto: true,
     patterns: [/(?:manuscript|submission)[^.]{0,60}(?:has\s+been\s+)?withdrawn/i, /withdrawal\s+(?:confirmed|request\s+processed)/i],
     // CRITICAL ANTI-PATTERNS. Journals routinely THREATEN withdrawal to chase a
     // signature: "your submission will be withdrawn unless the copyright form is
@@ -498,6 +563,11 @@ export const TERMINAL_STATUSES = new Set(
 export const STATUS_ORDER = [
   'Yet to start',
   'Submitted',
+  // 'Action Required' now has a position. Without one, findIndex returned -1
+  // and the regression guard waved it through — so a copyright chase could
+  // overwrite 'Accepted' on an accepted paper. Placed early so any move from a
+  // terminal state down to it is caught and queued for review instead.
+  'Action Required',
   'Unsubmitted (Action Required)',
   'Under Review',
   'Awaiting Editor Decision',
@@ -505,6 +575,8 @@ export const STATUS_ORDER = [
   'Minor Revision Requested',
   'Major Revision Requested',
   'Revision Submitted',
+  'Transfer Offered',
+  'Transferred',
   'Accepted (Conditional)',
   'Accepted',
   'In Production (Proofs)',
@@ -529,18 +601,41 @@ export const STATUS_ORDER = [
 export function classifyStatus(email) {
   const subject = email.subject || '';
   const body = stripQuotedReplies(email.body || '');
-  // Subject text is weighted more heavily: journals put the decision in the
-  // subject line ("Decision on JOSR-D-25-00417") and bodies contain history.
-  const haystack = `${subject}\n${subject}\n${body}`;
+  // Subject first, once. The old version repeated the subject to "weight" it,
+  // but nothing here counts occurrences — every use is .match()/.test() — so
+  // the duplicate only shifted match.index, corrupting evidence snippets and
+  // (now) the veto-proximity calculation. Subject weighting is done properly
+  // via the `inSubject` bonus below.
+  const haystack = `${subject}\n${body}`;
 
   const hits = [];
 
   for (const rule of RULES) {
-    // Veto first — cheaper and safer.
-    const veto = rule.notIf?.find((re) => re.test(haystack));
-    if (veto) continue;
-
-    const match = rule.patterns.map((re) => haystack.match(re)).find(Boolean);
+    // BUG-B FIX. A notIf exists to disqualify a SPECIFIC positive match, not to
+    // cancel the rule from anywhere in the document. The old global veto meant
+    // a rejection letter's standard appeal footer ("If you wish to appeal the
+    // rejection, please contact…") killed the Rejected rule outright — the
+    // email then matched NOTHING, produced no status, and was silently
+    // discarded rather than queued.
+    //
+    // Scope is the SENTENCE, not a character radius. "if your manuscript is
+    // rejected you may appeal" must veto, because the anti-pattern and the
+    // match are the same clause. An appeal footer two sentences below a
+    // decision must not, because it is talking about something else. Character
+    // distance cannot tell those apart; a sentence boundary can.
+    //
+    // Every positive pattern is tried, not just the first: if one is vetoed but
+    // another survives, the rule still fires on the survivor.
+    let match = null;
+    for (const re of rule.patterns) {
+      const m = haystack.match(re);
+      if (!m) continue;
+      const killed = (rule.notIf || []).some((nre) => {
+        if (rule.globalVeto) return nre.test(haystack);
+        return indicesOf(haystack, nre).some((vi) => sameSentence(haystack, m.index, vi));
+      });
+      if (!killed) { match = m; break; }
+    }
     if (!match) continue;
 
     const inSubject = rule.patterns.some((re) => re.test(subject));
@@ -560,7 +655,7 @@ export function classifyStatus(email) {
   if (hits.length === 0) {
     return {
       status: null, confidence: 0, rule: null, evidence: null,
-      ambiguous: false, ignore: false, urgent: false, competing: [],
+      ambiguous: false, ignore: false, urgent: false, urgentReasons: [], competing: [],
     };
   }
 
@@ -572,7 +667,7 @@ export function classifyStatus(email) {
     return {
       status: null, confidence: top.confidence, rule: top.status,
       evidence: top.evidence, ambiguous: false, ignore: true,
-      urgent: false, competing: [],
+      urgent: false, urgentReasons: [], competing: [],
     };
   }
 
@@ -589,6 +684,17 @@ export function classifyStatus(email) {
     if (bothDecisive && closeInScore) ambiguous = true;
   }
 
+  // ---- Urgency ---------------------------------------------------------
+  // BUG-A FIX. Urgency belongs to the EMAIL, not to the winning status. An
+  // email can legitimately be both "Under Review" and "sign this in 7 days or
+  // we pull the paper". Reading `urgent` off `top` alone silently dropped the
+  // alert whenever any higher-priority process rule also matched — which is
+  // most of the time, because Action Required sits at priority 45.
+  //
+  // The status still comes from the winner (the pipeline position is correct);
+  // the alert is OR'd across every rule that survived its vetoes.
+  const urgentHits = hits.filter((h) => h.urgent && !h.ignore);
+
   return {
     status: top.status,
     confidence: ambiguous ? Math.min(top.confidence, 0.5) : top.confidence,
@@ -596,7 +702,10 @@ export function classifyStatus(email) {
     evidence: top.evidence,
     ambiguous,
     ignore: false,
-    urgent: top.urgent,
+    urgent: urgentHits.length > 0,
+    // So the alert can quote the DEMAND ("copyright form … 7 days") rather
+    // than the status ("Under Review"), which is useless in a notification.
+    urgentReasons: urgentHits.map((h) => ({ status: h.status, evidence: h.evidence })),
     competing: hits.slice(0, 4).map((h) => ({ status: h.status, score: +h.score.toFixed(3) })),
   };
 }
@@ -634,6 +743,36 @@ export function stripQuotedReplies(body) {
     if (m && m.index !== undefined && m.index < cut && m.index > 120) cut = m.index;
   }
   return body.slice(0, cut);
+}
+
+/**
+ * Every start index at which `re` matches. An anti-pattern can appear several
+ * times ("rejected" in a decision line AND in a footer); only the occurrence in
+ * the same sentence as the match should veto it, so all of them are needed.
+ */
+function indicesOf(text, re) {
+  const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+  const out = [];
+  let m;
+  while ((m = g.exec(text)) !== null) {
+    out.push(m.index);
+    if (m.index === g.lastIndex) g.lastIndex++; // zero-width guard
+  }
+  return out;
+}
+
+/**
+ * Are two positions in the same sentence?
+ *
+ * Approximated by "no sentence terminator between them". Crude, and that is
+ * deliberate — the alternative is a sentence tokeniser that would itself become
+ * a source of bugs. Overlapping matches (a veto that starts before the pattern
+ * it disqualifies) are handled because the slice between them is then tiny.
+ */
+function sameSentence(text, a, b) {
+  const lo = Math.min(a, b);
+  const hi = Math.max(a, b);
+  return !/[.!?\n]/.test(text.slice(lo, hi));
 }
 
 /** Extract a readable window of text around a match, for the audit trail. */
@@ -717,13 +856,20 @@ export function isRelevant(email) {
   // Marketing/newsletter mail is dropped even from real publisher domains —
   // "Call for Papers" from Elsevier is not a status update.
   const nl = NEWSLETTER_MARKERS.find((re) => re.test(hay));
-  const looksTransactional = /(?:manuscript|submission)\s*(?:number|id|ref)/i.test(hay);
-  if (nl && !looksTransactional) {
+
+  // BUG-C FIX. This used to run its own regex,
+  //     /(?:manuscript|submission)\s*(?:number|id|ref)/i
+  // which does not match "Ms. Ref. No." — Editorial Manager's canonical field.
+  // MS_ID_PATTERNS.labelled handles `ms\.?` correctly, so there were two
+  // regexes for one concept and the wrong one guarded the gate. Any EM decision
+  // email carrying a routine unsubscribe footer was dropped before
+  // classification. Reuse the real extractor; one source of truth.
+  const hasMsId = !!extractManuscriptId(subject, body);
+  if (nl && !hasMsId) {
     return { relevant: false, reason: `newsletter-marker:${nl.source.slice(0, 30)}` };
   }
 
   const fromPublisher = PUBLISHER_HINTS.some((h) => from.includes(h));
-  const hasMsId = !!extractManuscriptId(subject, body);
   const editorialWords =
     /\b(?:manuscript|submission|peer\s+review|editor(?:ial)?\s+(?:office|decision)|reviewer)\b/i.test(hay);
 
